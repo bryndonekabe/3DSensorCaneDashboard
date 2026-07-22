@@ -1,0 +1,10 @@
+{
+  "description": "Visualize real-time 3D depth data from a smart cane, monitor diagnostics, and manage device settings for enhanced mobility and troubleshooting.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
