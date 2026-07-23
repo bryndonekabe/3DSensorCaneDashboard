@@ -10,13 +10,13 @@ export interface MotorState {
 
 export interface Diagnostics {
   cpu: number
-  battery: number      // percent
-  refresh_rate: number // Hz
-  speed: number        // m/s
-  bottleneck: string   // 'none' | 'sensor' | 'cpu' | 'network'
-  uptime: number       // seconds
+  battery: number
+  refresh_rate: number
+  speed: number
+  bottleneck: string
+  uptime: number
   temp?: number
-  signal?: number      // dBm
+  signal?: number
 }
 
 export interface CaneFrame {
@@ -36,6 +36,7 @@ export interface CaneSettings {
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
 export type Protocol = 'websocket' | 'mqtt'
+export type DisplayMode = 'dots' | 'spheres' | 'mesh'
 
 export const SENSOR_ROWS = 8
 export const SENSOR_COLS = 8

@@ -1,0 +1,77 @@
+export interface Theme {
+  id: string
+  name: string
+  // Three.js scene (numeric hex)
+  bgColor: number
+  gridColor: number
+  nearColor: number
+  midColor: number
+  farColor: number
+  // Motor indicator hues (degrees)
+  motorLeftHue: number
+  motorRightHue: number
+  // CSS colors for UI
+  accent: string
+  accentDim: string
+  surfaceBg: string
+  panelBg: string
+  panelBg2: string
+  border: string
+  text: string
+  muted: string
+}
+
+export const THEMES: Theme[] = [
+  {
+    id: 'void',
+    name: 'Void',
+    bgColor: 0x080c10, gridColor: 0x0b1e30,
+    nearColor: 0xff2222, midColor: 0xffaa00, farColor: 0x00e5ff,
+    motorLeftHue: 180, motorRightHue: 195,
+    accent: '#00e5ff', accentDim: '#00b8cc',
+    surfaceBg: '#080c10', panelBg: '#0d1520', panelBg2: '#111d2e',
+    border: '#1a2d42', text: '#c8ddf0', muted: '#4a6280',
+  },
+  {
+    id: 'ember',
+    name: 'Ember',
+    bgColor: 0x0e0804, gridColor: 0x2a1406,
+    nearColor: 0xff1111, midColor: 0xff6600, farColor: 0xffcc00,
+    motorLeftHue: 30, motorRightHue: 45,
+    accent: '#ff7700', accentDim: '#cc5500',
+    surfaceBg: '#0e0804', panelBg: '#1a0d06', panelBg2: '#22110a',
+    border: '#3d1e0a', text: '#f0d4b0', muted: '#7a4a28',
+  },
+  {
+    id: 'matrix',
+    name: 'Matrix',
+    bgColor: 0x020e04, gridColor: 0x051a09,
+    nearColor: 0x00ff44, midColor: 0x00dd88, farColor: 0x00aacc,
+    motorLeftHue: 140, motorRightHue: 160,
+    accent: '#00ff66', accentDim: '#00cc44',
+    surfaceBg: '#020e04', panelBg: '#061408', panelBg2: '#0a1e0d',
+    border: '#0e3316', text: '#a0e8b0', muted: '#2a6640',
+  },
+  {
+    id: 'plasma',
+    name: 'Plasma',
+    bgColor: 0x0a0514, gridColor: 0x180a2e,
+    nearColor: 0xff00aa, midColor: 0xaa00ff, farColor: 0x00ccff,
+    motorLeftHue: 280, motorRightHue: 300,
+    accent: '#cc44ff', accentDim: '#9922cc',
+    surfaceBg: '#0a0514', panelBg: '#12082a', panelBg2: '#180e36',
+    border: '#2e1255', text: '#d8b8f8', muted: '#6a3a9a',
+  },
+  {
+    id: 'frost',
+    name: 'Frost',
+    bgColor: 0x06101a, gridColor: 0x0d1e2e,
+    nearColor: 0xffffff, midColor: 0x88ccff, farColor: 0x0088ee,
+    motorLeftHue: 210, motorRightHue: 220,
+    accent: '#66aaff', accentDim: '#4488cc',
+    surfaceBg: '#06101a', panelBg: '#0d1a28', panelBg2: '#122030',
+    border: '#1a3050', text: '#cce0f8', muted: '#4a7090',
+  },
+]
+
+export const DEFAULT_THEME = THEMES[0]
