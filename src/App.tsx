@@ -5,6 +5,10 @@ import type { CaneFrame, CaneSettings, ConnectionStatus, Diagnostics, MotorState
 import { MAX_RANGE, SENSOR_COLS, GRID_SIZE } from './types'
 import { THEMES, DEFAULT_THEME, type Theme } from './themes'
 
+// ─── Types ────────────────────────────────────────────────────────────────────
+type LogSource = 'cane' | 'repl-in' | 'repl-out' | 'repl-err'
+interface LogEntry { id: number; ts: number; source: LogSource; msg: string }
+
 // ─── Demo data ────────────────────────────────────────────────────────────────
 function generateDemoFrame(t: number): CaneFrame {
   const updates: { i: number; d: number }[] = []
@@ -22,25 +26,45 @@ function generateDemoFrame(t: number): CaneFrame {
     timestamp: Date.now(), updates,
     motors: { left: lc ? Math.max(0, 0.55 + Math.sin(t*8)*0.3) : 0, right: rc ? Math.max(0, 0.55 + Math.sin(t*8+1)*0.3) : 0 },
     diagnostics: {
-      cpu: 36 + Math.sin(t*.7)*14, battery: Math.max(0, 82 - t*.008),
-      refresh_rate: 28 + Math.random()*4, speed: Math.abs(Math.sin(t*.4))*1.1,
-      bottleneck: t%18 < 1.5 ? 'sensor' : 'none', uptime: Math.floor(t),
-      temp: 41 + Math.sin(t*.5)*5, signal: -60 + Math.sin(t*.9)*8,
+      cpu: 36+Math.sin(t*.7)*14, battery: Math.max(0,82-t*.008),
+      refresh_rate: 28+Math.random()*4, speed: Math.abs(Math.sin(t*.4))*1.1,
+      bottleneck: t%18<1.5?'sensor':'none', uptime: Math.floor(t),
+      temp: 41+Math.sin(t*.5)*5, signal: -60+Math.sin(t*.9)*8,
     },
+    log: t%5 < 0.07 ? [`[INFO] scan ok, ${Math.floor(Math.random()*64)} points updated`] : undefined,
   }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-const fmt = (s: number) => `${String(Math.floor(s/3600)).padStart(2,'0')}:${String(Math.floor((s%3600)/60)).padStart(2,'0')}:${String(Math.floor(s%60)).padStart(2,'0')}`
-const fmtB = (n: number) => n < 1024 ? `${n} B` : n < 1048576 ? `${(n/1024).toFixed(1)} KB` : `${(n/1048576).toFixed(2)} MB`
+const fmt = (s: number) =>
+  `${String(Math.floor(s/3600)).padStart(2,'0')}:${String(Math.floor((s%3600)/60)).padStart(2,'0')}:${String(Math.floor(s%60)).padStart(2,'0')}`
+const fmtB = (n: number) => n<1024?`${n} B`:n<1048576?`${(n/1024).toFixed(1)} KB`:`${(n/1048576).toFixed(2)} MB`
+let _logId = 0
 
-// ─── Atom components (themed) ─────────────────────────────────────────────────
+function formatReplValue(v: unknown): string {
+  if (v === undefined) return 'undefined'
+  if (v === null) return 'null'
+  if (typeof v === 'string') return JSON.stringify(v)
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v)
+  if (v instanceof Float32Array || ArrayBuffer.isView(v)) {
+    const arr = v as Float32Array
+    const preview = Array.from(arr).slice(0, 10).map(x => (x as number).toFixed(2)).join(', ')
+    return `Float32Array(${arr.length}) [${preview}${arr.length > 10 ? ', …' : ''}]`
+  }
+  try { return JSON.stringify(v, null, 2).slice(0, 800) } catch { return String(v) }
+}
+
+function normalizeWsPath(p: string): string {
+  if (!p) return ''
+  return p.startsWith('/') ? p : `/${p}`
+}
+
+// ─── Atom components ──────────────────────────────────────────────────────────
 function StatusDot({ status, theme }: { status: ConnectionStatus; theme: Theme }) {
   const color = status==='connected'?'#00cc66':status==='connecting'?'#ffaa00':status==='error'?'#ff4444':theme.border
-  const pulse = status==='connected'||status==='connecting'
   return (
     <span className="relative inline-flex w-2.5 h-2.5 items-center justify-center shrink-0">
-      {pulse && <span className="absolute w-full h-full rounded-full opacity-40 animate-ping" style={{background:color}}/>}
+      {(status==='connected'||status==='connecting') && <span className="absolute w-full h-full rounded-full opacity-40 animate-ping" style={{background:color}}/>}
       <span className="relative w-2 h-2 rounded-full" style={{background:color}}/>
     </span>
   )
@@ -62,7 +86,8 @@ function GaugeBar({ value, max=100, color, label, unit='%', theme }: { value:num
 
 function Tile({ label, value, unit, warn=false, theme }: { label:string; value:string|number; unit?:string; warn?:boolean; theme:Theme }) {
   return (
-    <div className="flex flex-col gap-0.5 rounded p-2" style={{border:`1px solid ${warn?'rgba(255,68,68,0.2)':theme.border}`,background:warn?'rgba(255,68,68,0.04)':theme.panelBg}}>
+    <div className="flex flex-col gap-0.5 rounded p-2"
+      style={{border:`1px solid ${warn?'rgba(255,68,68,0.2)':theme.border}`,background:warn?'rgba(255,68,68,0.04)':theme.panelBg}}>
       <span className="text-[9px] uppercase tracking-widest" style={{color:theme.muted}}>{label}</span>
       <span className="font-mono text-xs leading-tight" style={{color:warn?'#ff4444':theme.text}}>
         {value}{unit&&<span className="text-[10px] ml-0.5" style={{color:theme.muted}}>{unit}</span>}
@@ -98,29 +123,18 @@ function BatteryIcon({ pct }: { pct: number }) {
   )
 }
 
-function ThemedInput({ value, onChange, disabled, placeholder }: { value:string; onChange:(v:string)=>void; disabled?:boolean; placeholder?:string }) {
-  return (
-    <input value={value} onChange={e=>onChange(e.target.value)} disabled={disabled} placeholder={placeholder}
-      className="w-full rounded px-2.5 py-1.5 font-mono text-xs outline-none transition-colors disabled:opacity-40"
-      style={{background:'#0d1520',border:'1px solid #1a2d42',color:'#c8ddf0'}}
-    />
-  )
-}
-
 function SL({ children, theme }: { children: React.ReactNode; theme: Theme }) {
   return <span className="text-[9px] uppercase tracking-widest" style={{color:theme.muted}}>{children}</span>
 }
-function Div({ theme }: { theme: Theme }) {
-  return <div style={{ height: 1, background: theme.border }}/>
-}
+function Div({ theme }: { theme: Theme }) { return <div style={{height:1,background:theme.border}}/> }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const EMPTY_DIAG: Diagnostics = { cpu:0, battery:100, refresh_rate:0, speed:0, bottleneck:'none', uptime:0 }
 const EMPTY_MOTORS: MotorState = { left:0, right:0 }
 const DEFAULT_SETTINGS: CaneSettings = { motor_left_mult:1.0, motor_right_mult:1.0, refresh_rate:30, threshold_near:0.8, threshold_far:2.5 }
-const TABS = ['diag','config','settings','theme','firmware'] as const
+const TABS = ['diag','config','settings','theme','firmware','logs'] as const
 type Tab = typeof TABS[number]
-const TAB_LABELS: Record<Tab,string> = { diag:'Diag', config:'Connect', settings:'Tune', theme:'Theme', firmware:'FW' }
+const TAB_LABELS: Record<Tab,string> = { diag:'Diag', config:'Link', settings:'Tune', theme:'Theme', firmware:'FW', logs:'Logs' }
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
@@ -128,6 +142,7 @@ export default function App() {
   const [protocol, setProtocol] = useState<Protocol>('websocket')
   const [wsHost, setWsHost] = useState('192.168.1.100')
   const [wsPort, setWsPort] = useState('8765')
+  const [wsPath, setWsPath] = useState('')
   const [mqttHost, setMqttHost] = useState('192.168.1.100')
   const [mqttPort, setMqttPort] = useState('9001')
   const [mqttDataTopic, setMqttDataTopic] = useState('cane/data')
@@ -143,6 +158,23 @@ export default function App() {
   const [diag, setDiag] = useState<Diagnostics>(EMPTY_DIAG)
   const [frameCount, setFrameCount] = useState(0)
   const [lastTs, setLastTs] = useState<number|null>(null)
+
+  // Logs & REPL
+  const [logEntries, setLogEntries] = useState<LogEntry[]>([])
+  const [logsSubTab, setLogsSubTab] = useState<'cane'|'repl'>('cane')
+  const [replInput, setReplInput] = useState('')
+  const [replHistory, setReplHistory] = useState<string[]>([])
+  const [replHistIdx, setReplHistIdx] = useState(-1)
+  const logsEndRef = useRef<HTMLDivElement>(null)
+  const replEndRef = useRef<HTMLDivElement>(null)
+  const lastFrameRef = useRef<CaneFrame|null>(null)
+  const stateSnap = useRef<Record<string, unknown>>({})
+
+  // Session recording
+  const sessionFrames = useRef<CaneFrame[]>([])
+  const isRecordingRef = useRef(false)
+  const [isRecording, setIsRecording] = useState(false)
+  const [recFrameCount, setRecFrameCount] = useState(0)
 
   // UI
   const [tab, setTab] = useState<Tab>('config')
@@ -175,6 +207,25 @@ export default function App() {
   const demoTimer = useRef<ReturnType<typeof setInterval>|null>(null)
   const demoTime = useRef(0)
 
+  // Keep stateSnap in sync for REPL eval
+  useEffect(() => {
+    stateSnap.current = {
+      depthBuffer: depthBuf.current,
+      motors, diag, frameCount,
+      lastFrame: lastFrameRef.current,
+      MAX_RANGE, GRID_SIZE,
+    }
+  }, [motors, diag, frameCount])
+
+  // Auto-scroll logs
+  useEffect(() => {
+    if (tab === 'logs') {
+      logsSubTab === 'cane'
+        ? logsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+        : replEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [logEntries, tab, logsSubTab])
+
   // Sidebar drag resize
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
@@ -182,16 +233,20 @@ export default function App() {
       setSidebarW(Math.max(200, Math.min(520, dragState.current.sw + e.clientX - dragState.current.sx)))
     }
     const onUp = () => { dragState.current.active = false; document.body.style.cursor = '' }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
+    window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp)
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
   }, [])
 
   const startSidebarDrag = (e: React.MouseEvent) => {
     e.preventDefault()
-    dragState.current = { active: true, sx: e.clientX, sw: sidebarW }
+    dragState.current = { active:true, sx:e.clientX, sw:sidebarW }
     document.body.style.cursor = 'ew-resize'
   }
+
+  // Frame ingestion
+  const pushLog = useCallback((entries: LogEntry[]) => {
+    setLogEntries(prev => [...prev.slice(-800), ...entries])
+  }, [])
 
   const applyFrame = useCallback((frame: CaneFrame) => {
 console.log(
@@ -203,14 +258,32 @@ console.log(
     frame.updates.slice(-5)
   )
     for (const {i,d} of frame.updates) { if (i>=0&&i<GRID_SIZE) depthBuf.current[i]=d }
-    setDepthVer(v=>v+1); setMotors(frame.motors); setDiag(frame.diagnostics)
-    setLastTs(frame.timestamp); setFrameCount(c=>c+1)
-  }, [])
+    setDepthVer(v=>v+1)
+    setMotors(frame.motors)
+    setDiag(frame.diagnostics)
+    setLastTs(frame.timestamp)
+    setFrameCount(c=>c+1)
+    lastFrameRef.current = frame
+
+    if (isRecordingRef.current) {
+      sessionFrames.current.push(frame)
+      setRecFrameCount(c=>c+1)
+    }
+
+    if (frame.log?.length) {
+      pushLog(frame.log.map(msg => ({ id: ++_logId, ts: frame.timestamp, source: 'cane', msg })))
+    }
+  }, [pushLog])
 
   const resetData = useCallback(() => {
     depthBuf.current.fill(NaN); setDepthVer(v=>v+1)
     setMotors(EMPTY_MOTORS); setDiag(EMPTY_DIAG); setFrameCount(0); setLastTs(null)
+    lastFrameRef.current = null
   }, [])
+
+  // Connection helpers
+  const wsScheme = () => window.location.protocol === 'https:' ? 'wss' : 'ws'
+  const mqttScheme = () => window.location.protocol === 'https:' ? 'wss' : 'ws'
 
   const sendRaw = useCallback((payload: string|ArrayBuffer) => {
     if (wsRef.current?.readyState===WebSocket.OPEN) wsRef.current.send(payload)
@@ -228,23 +301,24 @@ console.log(
 
   const connectWS = useCallback(() => {
     disconnect(); setStatus('connecting')
-    const ws = new WebSocket(`ws://${wsHost}:${wsPort}`)
+    const url = `${wsScheme()}://${wsHost}:${wsPort}${normalizeWsPath(wsPath)}`
+    const ws = new WebSocket(url)
     wsRef.current = ws
     ws.onopen = () => setStatus('connected')
     ws.onclose = () => { setStatus('disconnected'); wsRef.current = null }
     ws.onerror = () => setStatus('error')
     ws.onmessage = evt => { try { applyFrame(JSON.parse(evt.data)) } catch {} }
-  }, [wsHost, wsPort, disconnect, applyFrame])
+  }, [wsHost, wsPort, wsPath, disconnect, applyFrame]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const connectMQTT = useCallback(() => {
     disconnect(); setStatus('connecting')
-    const client = mqtt.connect(`ws://${mqttHost}:${mqttPort}`, { reconnectPeriod: 0 })
+    const client = mqtt.connect(`${mqttScheme()}://${mqttHost}:${mqttPort}`, { reconnectPeriod: 0 })
     mqttRef.current = client
     client.on('connect', () => { setStatus('connected'); client.subscribe(mqttDataTopic) })
     client.on('message', (_t, p) => { try { applyFrame(JSON.parse(p.toString())) } catch {} })
     client.on('error', () => setStatus('error'))
     client.on('close', () => { setStatus('disconnected'); mqttRef.current = null })
-  }, [mqttHost, mqttPort, mqttDataTopic, disconnect, applyFrame])
+  }, [mqttHost, mqttPort, mqttDataTopic, disconnect, applyFrame]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const connect = useCallback(() => {
     protocol === 'websocket' ? connectWS() : connectMQTT()
@@ -255,6 +329,7 @@ console.log(
     demoTimer.current = setInterval(() => { demoTime.current += 1/15; applyFrame(generateDemoFrame(demoTime.current)) }, 67)
   }, [disconnect, applyFrame])
 
+  // Settings / shutdown / firmware
   const sendSettings = useCallback(() => {
     sendCmd({ command:'settings', settings:pendingSettings }); setSettingsSent(true)
     setTimeout(() => setSettingsSent(false), 1800)
@@ -282,6 +357,79 @@ console.log(
     } catch { setFwStatus('error') }
   }, [fwFile, sendCmd, sendRaw])
 
+  // Session recording
+  const toggleRecording = useCallback(() => {
+    if (isRecordingRef.current) {
+      isRecordingRef.current = false; setIsRecording(false)
+    } else {
+      sessionFrames.current = []; setRecFrameCount(0)
+      isRecordingRef.current = true; setIsRecording(true)
+    }
+  }, [])
+
+  const exportSession = useCallback(() => {
+    const frames = sessionFrames.current
+    if (!frames.length) return
+    const payload = {
+      exported: new Date().toISOString(),
+      frameCount: frames.length,
+      durationSec: frames.length > 1 ? (frames[frames.length-1].timestamp - frames[0].timestamp) / 1000 : 0,
+      frames,
+    }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `pathfinder-${new Date().toISOString().slice(0,19).replace(/:/g,'-')}.json`
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }, [])
+
+  const exportLogs = useCallback(() => {
+    const text = logEntries
+      .filter(e => e.source === 'cane')
+      .map(e => `[${new Date(e.ts).toISOString()}] ${e.msg}`)
+      .join('\n')
+    const blob = new Blob([text], { type: 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `pathfinder-logs-${Date.now()}.txt`
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }, [logEntries])
+
+  // REPL eval
+  const evalRepl = useCallback((code: string) => {
+    const ctx = stateSnap.current
+    const keys = Object.keys(ctx)
+    const vals = Object.values(ctx)
+    try {
+      const fn = new Function(...keys, `"use strict"; return (\n${code}\n)`)
+      return { ok: true as const, value: fn(...vals) }
+    } catch {
+      try {
+        const fn2 = new Function(...keys, `"use strict";\n${code}`)
+        fn2(...vals)
+        return { ok: true as const, value: undefined }
+      } catch (e2) {
+        return { ok: false as const, error: String(e2) }
+      }
+    }
+  }, [])
+
+  const submitRepl = useCallback((code: string) => {
+    if (!code.trim()) return
+    const inEntry: LogEntry = { id: ++_logId, ts: Date.now(), source: 'repl-in', msg: code }
+    const result = evalRepl(code)
+    const outEntry: LogEntry = result.ok
+      ? { id: ++_logId, ts: Date.now(), source: 'repl-out', msg: formatReplValue(result.value) }
+      : { id: ++_logId, ts: Date.now(), source: 'repl-err', msg: result.error! }
+    pushLog([inEntry, outEntry])
+    setReplHistory(h => [code, ...h.slice(0, 99)])
+    setReplHistIdx(-1)
+    setReplInput('')
+  }, [evalRepl, pushLog])
+
   useEffect(() => () => {
     if (demoTimer.current) clearInterval(demoTimer.current)
     wsRef.current?.close(); mqttRef.current?.end(true)
@@ -291,23 +439,34 @@ console.log(
   const canSend = connected && !demoMode
   const T = activeTheme
 
-  // Tab button style
   const tabCls = (t: Tab) => ({
     flex: '1 1 0', padding: '8px 2px', fontSize: 9, fontFamily: 'monospace',
-    textTransform: 'uppercase' as const, letterSpacing: '0.1em',
-    borderBottom: tab===t ? `1px solid ${T.accent}` : 'none',
+    textTransform: 'uppercase' as const, letterSpacing: '0.08em',
+    borderBottom: tab===t ? `1px solid ${T.accent}` : `1px solid transparent`,
     color: tab===t ? T.accent : T.muted,
     background: 'transparent', cursor: 'pointer', transition: 'color 0.15s',
-    marginBottom: tab===t ? -1 : 0,
   })
 
-  // Text input style
-  const inputStyle = { background: T.panelBg, border: `1px solid ${T.border}`, color: T.text, borderRadius: 4, padding: '6px 10px', fontFamily: 'monospace', fontSize: 12, outline: 'none', width: '100%' }
+  const iStyle = { background:T.panelBg, border:`1px solid ${T.border}`, color:T.text, borderRadius:4, padding:'6px 10px', fontFamily:'monospace', fontSize:12, outline:'none', width:'100%' } as const
+
+  const caneLogs = logEntries.filter(e => e.source === 'cane')
+  const replLogs = logEntries.filter(e => e.source.startsWith('repl'))
+
+  const logColor = (src: LogSource) =>
+    src === 'repl-in' ? T.accent : src === 'repl-err' ? '#ff4444' : src === 'repl-out' ? T.text : (
+      /* cane log level */ T.text
+    )
+
+  const caneMsgColor = (msg: string) =>
+    msg.includes('[ERROR]') || msg.includes('[ERR]') ? '#ff4444'
+    : msg.includes('[WARN]') ? '#ffaa00'
+    : msg.includes('[DEBUG]') ? T.muted
+    : T.text
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden" style={{ background: T.surfaceBg, color: T.text }}>
+    <div className="flex flex-col h-screen overflow-hidden" style={{ background:T.surfaceBg, color:T.text }}>
       {/* ── Top bar ── */}
-      <header className="flex items-center gap-3 px-4 shrink-0" style={{ height: 44, borderBottom: `1px solid ${T.border}` }}>
+      <header className="flex items-center gap-3 px-4 shrink-0" style={{ height:44, borderBottom:`1px solid ${T.border}` }}>
         <button onClick={() => setSidebarOpen(o=>!o)}
           className="flex items-center justify-center w-7 h-7 rounded transition-colors shrink-0"
           style={{ border:`1px solid ${T.border}`, color:T.muted }}>
@@ -323,20 +482,16 @@ console.log(
             <path d="M6.5 1v14M6.5 1C6.5 1 2 5 2 8.5M6.5 1C6.5 1 11 5 11 8.5" stroke={T.accent} strokeWidth="1.2" strokeLinecap="round"/>
             <circle cx="6.5" cy="15" r="1.5" fill={T.accent} fillOpacity=".6"/>
           </svg>
-          <span className="font-mono text-sm tracking-widest" style={{ color: T.accent }}>PATHFINDER</span>
-          <span className="font-mono text-[10px]" style={{ color: T.muted }}>Dashboard</span>
+          <span className="font-mono text-sm tracking-widest" style={{color:T.accent}}>PATHFINDER</span>
+          <span className="font-mono text-[10px]" style={{color:T.muted}}>Dashboard</span>
         </div>
 
-        {/* Display mode pills */}
+        {/* Display mode */}
         <div className="flex gap-1 ml-2 shrink-0">
           {(['dots','spheres','mesh'] as DisplayMode[]).map(m => (
             <button key={m} onClick={() => setDisplayMode(m)}
               className="px-2.5 py-1 rounded font-mono text-[9px] uppercase tracking-wider transition-colors"
-              style={{
-                border: `1px solid ${displayMode===m ? T.accent : T.border}`,
-                background: displayMode===m ? `${T.accent}15` : 'transparent',
-                color: displayMode===m ? T.accent : T.muted,
-              }}>
+              style={{ border:`1px solid ${displayMode===m?T.accent:T.border}`, background:displayMode===m?`${T.accent}15`:'transparent', color:displayMode===m?T.accent:T.muted }}>
               {m}
             </button>
           ))}
@@ -344,18 +499,35 @@ console.log(
 
         <div className="flex items-center gap-3 font-mono text-[11px] ml-1">
           <StatusDot status={status} theme={T}/>
-          <span style={{ color: status==='connected'?'#00cc66':status==='connecting'?'#ffaa00':status==='error'?'#ff4444':T.muted }}>
-            {demoMode ? 'DEMO' : status.toUpperCase()}
+          <span style={{color:status==='connected'?'#00cc66':status==='connecting'?'#ffaa00':status==='error'?'#ff4444':T.muted}}>
+            {demoMode?'DEMO':status.toUpperCase()}
           </span>
           {connected && <>
             <span style={{color:T.border}}>|</span>
             <span style={{color:T.muted}}><span style={{color:T.accent}}>{diag.refresh_rate.toFixed(1)}</span> Hz</span>
             <span style={{color:T.border}}>|</span>
-            <span style={{color:T.muted}}><span style={{color:T.accent}}>{frameCount}</span> frames</span>
+            <span style={{color:T.muted}}><span style={{color:T.accent}}>{frameCount}</span> fr</span>
           </>}
         </div>
 
-        <div style={{ flex: 1 }}/>
+        <div style={{flex:1}}/>
+
+        {/* Recording pill */}
+        <button onClick={toggleRecording}
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded font-mono text-[10px] transition-colors shrink-0"
+          style={{ border:`1px solid ${isRecording?'#ff444466':T.border}`, color:isRecording?'#ff4444':T.muted, background:isRecording?'rgba(255,68,68,0.06)':'transparent' }}>
+          <span className={`w-2 h-2 rounded-full shrink-0 ${isRecording?'animate-pulse':''}`}
+            style={{background:isRecording?'#ff4444':T.muted}}/>
+          {isRecording ? `REC ${recFrameCount}fr` : 'REC'}
+        </button>
+        {recFrameCount > 0 && !isRecording && (
+          <button onClick={exportSession}
+            className="px-2.5 py-1 rounded font-mono text-[10px] transition-colors shrink-0"
+            style={{ border:`1px solid ${T.border}`, color:T.accent }}>
+            ↓ Export
+          </button>
+        )}
+
         {connected && (
           <div className="flex items-center gap-3 font-mono text-[11px] shrink-0" style={{color:T.muted}}>
             <BatteryIcon pct={diag.battery}/>
@@ -368,377 +540,408 @@ console.log(
       <div className="flex flex-1 overflow-hidden">
         {/* ── Sidebar ── */}
         {sidebarOpen && (
-          <div className="flex shrink-0 overflow-hidden" style={{ width: sidebarW }}>
-            <aside className="flex flex-col flex-1 overflow-hidden" style={{ borderRight: `1px solid ${T.border}` }}>
+          <div className="flex shrink-0 overflow-hidden" style={{width:sidebarW}}>
+            <aside className="flex flex-col flex-1 overflow-hidden" style={{borderRight:`1px solid ${T.border}`}}>
               {/* Tabs */}
-              <div className="flex shrink-0" style={{ borderBottom: `1px solid ${T.border}` }}>
+              <div className="flex shrink-0" style={{borderBottom:`1px solid ${T.border}`}}>
                 {TABS.map(t => <button key={t} onClick={()=>setTab(t)} style={tabCls(t)}>{TAB_LABELS[t]}</button>)}
               </div>
 
-              <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+              <div className="flex-1 overflow-y-auto flex flex-col">
 
                 {/* ══ DIAG ══ */}
-                {tab==='diag' && <>
-                  <div className="flex flex-col gap-2">
-                    <SL theme={T}>Power</SL>
-                    <div className="flex items-center gap-3 rounded p-3" style={{border:`1px solid ${T.border}`,background:T.panelBg}}>
-                      <BatteryIcon pct={diag.battery}/>
-                      <div className="flex flex-col">
-                        <span className="font-mono text-xl leading-none" style={{color:diag.battery>50?'#00cc66':diag.battery>20?'#ffaa00':'#ff4444'}}>{diag.battery.toFixed(0)}%</span>
-                        <span className="text-[9px]" style={{color:T.muted}}>Battery</span>
+                {tab==='diag' && (
+                  <div className="flex flex-col gap-4 p-4">
+                    <div className="flex flex-col gap-2">
+                      <SL theme={T}>Power</SL>
+                      <div className="flex items-center gap-3 rounded p-3" style={{border:`1px solid ${T.border}`,background:T.panelBg}}>
+                        <BatteryIcon pct={diag.battery}/>
+                        <div className="flex flex-col">
+                          <span className="font-mono text-xl leading-none" style={{color:diag.battery>50?'#00cc66':diag.battery>20?'#ffaa00':'#ff4444'}}>{diag.battery.toFixed(0)}%</span>
+                          <span className="text-[9px]" style={{color:T.muted}}>Battery</span>
+                        </div>
                       </div>
                     </div>
-                  </div>
-
-                  <div className="flex flex-col gap-3">
-                    <SL theme={T}>Performance</SL>
-                    <GaugeBar value={diag.cpu} label="CPU" color={diag.cpu>80?'#ff4444':diag.cpu>60?'#ffaa00':T.accent} theme={T}/>
-                    <GaugeBar value={diag.refresh_rate} max={60} label="Refresh" unit=" Hz" color="#00cc66" theme={T}/>
-                    <GaugeBar value={diag.speed} max={2} label="Speed" unit=" m/s" color={T.accent} theme={T}/>
-                  </div>
-
-                  <div className="flex flex-col gap-3">
-                    <SL theme={T}>Motors</SL>
-                    <GaugeBar value={motors.left*100} label="Left" color={T.accent} theme={T}/>
-                    <GaugeBar value={motors.right*100} label="Right" color={T.accentDim} theme={T}/>
-                  </div>
-
-                  <div className="flex flex-col gap-2">
-                    <SL theme={T}>System</SL>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      <Tile label="Uptime" value={fmt(diag.uptime)} theme={T}/>
-                      {diag.temp!==undefined&&<Tile label="Temp" value={diag.temp.toFixed(1)} unit="°C" warn={diag.temp>70} theme={T}/>}
-                      {diag.signal!==undefined&&<Tile label="Signal" value={`${diag.signal.toFixed(0)} dBm`} theme={T}/>}
-                      <Tile label="Frames" value={frameCount} theme={T}/>
+                    <div className="flex flex-col gap-3">
+                      <SL theme={T}>Performance</SL>
+                      <GaugeBar value={diag.cpu} label="CPU" color={diag.cpu>80?'#ff4444':diag.cpu>60?'#ffaa00':T.accent} theme={T}/>
+                      <GaugeBar value={diag.refresh_rate} max={60} label="Refresh" unit=" Hz" color="#00cc66" theme={T}/>
+                      <GaugeBar value={diag.speed} max={2} label="Speed" unit=" m/s" color={T.accent} theme={T}/>
                     </div>
-                  </div>
-
-                  <div className="flex flex-col gap-2">
-                    <SL theme={T}>Bottleneck</SL>
-                    <div className="flex items-center gap-2 rounded p-2.5 font-mono text-xs"
-                      style={{
+                    <div className="flex flex-col gap-3">
+                      <SL theme={T}>Motors</SL>
+                      <GaugeBar value={motors.left*100} label="Left" color={T.accent} theme={T}/>
+                      <GaugeBar value={motors.right*100} label="Right" color={T.accentDim} theme={T}/>
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <SL theme={T}>System</SL>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <Tile label="Uptime" value={fmt(diag.uptime)} theme={T}/>
+                        {diag.temp!==undefined&&<Tile label="Temp" value={diag.temp.toFixed(1)} unit="°C" warn={diag.temp>70} theme={T}/>}
+                        {diag.signal!==undefined&&<Tile label="Signal" value={`${diag.signal.toFixed(0)} dBm`} theme={T}/>}
+                        <Tile label="Frames" value={frameCount} theme={T}/>
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <SL theme={T}>Bottleneck</SL>
+                      <div className="flex items-center gap-2 rounded p-2.5 font-mono text-xs" style={{
                         border:`1px solid ${diag.bottleneck!=='none'&&diag.bottleneck!==''?'rgba(255,68,68,0.2)':T.border}`,
                         background:diag.bottleneck!=='none'&&diag.bottleneck!==''?'rgba(255,68,68,0.04)':T.panelBg,
                         color:diag.bottleneck!=='none'&&diag.bottleneck!==''?'#ff4444':'#00cc66',
                       }}>
-                      <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{background:diag.bottleneck!=='none'&&diag.bottleneck!==''?'#ff4444':'#00cc66'}}/>
-                      {diag.bottleneck==='none'||diag.bottleneck===''?'NOMINAL':diag.bottleneck.toUpperCase()}
+                        <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{background:diag.bottleneck!=='none'&&diag.bottleneck!==''?'#ff4444':'#00cc66'}}/>
+                        {diag.bottleneck==='none'||diag.bottleneck===''?'NOMINAL':diag.bottleneck.toUpperCase()}
+                      </div>
                     </div>
                   </div>
-                </>}
+                )}
 
                 {/* ══ CONFIG ══ */}
-                {tab==='config' && <>
-                  <div className="flex flex-col gap-2">
-                    <SL theme={T}>Protocol</SL>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      {(['websocket','mqtt'] as Protocol[]).map(p => (
-                        <button key={p} onClick={()=>setProtocol(p)}
-                          className="py-2 font-mono rounded transition-colors"
-                          style={{fontSize:10,border:`1px solid ${protocol===p?T.accent:T.border}`,background:protocol===p?`${T.accent}15`:'transparent',color:protocol===p?T.accent:T.muted}}>
-                          {p==='websocket'?'WebSocket':'MQTT'}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <Div theme={T}/>
-
-                  {protocol==='websocket' && (
+                {tab==='config' && (
+                  <div className="flex flex-col gap-4 p-4">
                     <div className="flex flex-col gap-2">
-                      <SL theme={T}>WebSocket</SL>
-                      {[['Host / IP', wsHost, setWsHost], ['Port', wsPort, setWsPort]].map(([lbl,val,set]) => (
-                        <div key={lbl as string} className="flex flex-col gap-1">
-                          <label className="text-[9px] font-mono" style={{color:T.muted}}>{lbl as string}</label>
-                          <input value={val as string} onChange={e=>(set as (v:string)=>void)(e.target.value)}
-                            disabled={connected&&!demoMode} style={inputStyle}/>
-                        </div>
-                      ))}
+                      <SL theme={T}>Protocol</SL>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        {(['websocket','mqtt'] as Protocol[]).map(p => (
+                          <button key={p} onClick={()=>setProtocol(p)}
+                            className="py-2 font-mono rounded transition-colors"
+                            style={{fontSize:10,border:`1px solid ${protocol===p?T.accent:T.border}`,background:protocol===p?`${T.accent}15`:'transparent',color:protocol===p?T.accent:T.muted}}>
+                            {p==='websocket'?'WebSocket':'MQTT'}
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                  )}
-
-                  {protocol==='mqtt' && (
+                    <Div theme={T}/>
+                    {protocol==='websocket' && (
+                      <div className="flex flex-col gap-2">
+                        <SL theme={T}>WebSocket</SL>
+                        {([['Host / IP', wsHost, setWsHost],['Port', wsPort, setWsPort]] as [string,string,(v:string)=>void][]).map(([lbl,val,set]) => (
+                          <div key={lbl} className="flex flex-col gap-1">
+                            <label className="text-[9px] font-mono" style={{color:T.muted}}>{lbl}</label>
+                            <input value={val} onChange={e=>set(e.target.value)} disabled={connected&&!demoMode} style={iStyle}/>
+                          </div>
+                        ))}
+                        <div className="flex flex-col gap-1">
+                          <label className="text-[9px] font-mono" style={{color:T.muted}}>Path (e.g. /ws)</label>
+                          <input value={wsPath} onChange={e=>setWsPath(e.target.value)} disabled={connected&&!demoMode}
+                            placeholder="/ws" style={iStyle}/>
+                        </div>
+                        <div className="font-mono text-[9px] rounded px-2 py-1.5" style={{background:T.panelBg2,color:T.muted}}>
+                          {wsScheme()}://{wsHost}:{wsPort}{normalizeWsPath(wsPath) || '/'}
+                        </div>
+                      </div>
+                    )}
+                    {protocol==='mqtt' && (
+                      <div className="flex flex-col gap-2">
+                        <SL theme={T}>MQTT over WebSocket</SL>
+                        {([
+                          ['Broker Host', mqttHost, setMqttHost],
+                          ['WS Port', mqttPort, setMqttPort],
+                          ['Data Topic', mqttDataTopic, setMqttDataTopic],
+                          ['Command Topic', mqttCmdTopic, setMqttCmdTopic],
+                        ] as [string,string,(v:string)=>void][]).map(([lbl,val,set]) => (
+                          <div key={lbl} className="flex flex-col gap-1">
+                            <label className="text-[9px] font-mono" style={{color:T.muted}}>{lbl}</label>
+                            <input value={val} onChange={e=>set(e.target.value)} disabled={connected&&!demoMode} style={iStyle}/>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="flex gap-2">
+                      {!connected
+                        ? <button onClick={connect} className="flex-1 py-2 font-mono rounded font-semibold" style={{fontSize:11,background:T.accent,color:T.surfaceBg}}>CONNECT</button>
+                        : <button onClick={disconnect} className="flex-1 py-2 font-mono rounded" style={{fontSize:11,border:'1px solid rgba(255,68,68,0.35)',color:'#ff4444'}}>DISCONNECT</button>
+                      }
+                    </div>
+                    <Div theme={T}/>
+                    <button onClick={demoMode?disconnect:startDemo} className="py-2 font-mono rounded"
+                      style={{fontSize:11,border:`1px solid ${demoMode?'rgba(255,170,0,0.35)':T.border}`,color:demoMode?'#ffaa00':T.muted}}>
+                      {demoMode?'STOP DEMO':'RUN DEMO'}
+                    </button>
+                    <Div theme={T}/>
                     <div className="flex flex-col gap-2">
-                      <SL theme={T}>MQTT over WebSocket</SL>
-                      {[
-                        ['Broker Host', mqttHost, setMqttHost],
-                        ['WS Port', mqttPort, setMqttPort],
-                        ['Data Topic', mqttDataTopic, setMqttDataTopic],
-                        ['Command Topic', mqttCmdTopic, setMqttCmdTopic],
-                      ].map(([lbl,val,set]) => (
-                        <div key={lbl as string} className="flex flex-col gap-1">
-                          <label className="text-[9px] font-mono" style={{color:T.muted}}>{lbl as string}</label>
-                          <input value={val as string} onChange={e=>(set as (v:string)=>void)(e.target.value)}
-                            disabled={connected&&!demoMode} style={inputStyle}/>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  <div className="flex gap-2">
-                    {!connected
-                      ? <button onClick={connect} className="flex-1 py-2 font-mono rounded font-semibold transition-colors"
-                          style={{fontSize:11,background:T.accent,color:T.surfaceBg}}>CONNECT</button>
-                      : <button onClick={disconnect} className="flex-1 py-2 font-mono rounded transition-colors"
-                          style={{fontSize:11,border:'1px solid rgba(255,68,68,0.35)',color:'#ff4444'}}>DISCONNECT</button>
-                    }
-                  </div>
-
-                  <Div theme={T}/>
-                  <button onClick={demoMode?disconnect:startDemo} className="py-2 font-mono rounded transition-colors"
-                    style={{fontSize:11,border:`1px solid ${demoMode?'rgba(255,170,0,0.35)':T.border}`,color:demoMode?'#ffaa00':T.muted}}>
-                    {demoMode?'STOP DEMO':'RUN DEMO'}
-                  </button>
-
-                  <Div theme={T}/>
-
-                  <div className="flex flex-col gap-2">
-                    <SL theme={T}>Frame Format</SL>
-                    <pre className="text-[9px] font-mono leading-relaxed overflow-x-auto whitespace-pre-wrap rounded p-2.5"
-                      style={{background:T.panelBg,border:`1px solid ${T.border}`,color:T.muted}}>
+                      <SL theme={T}>Frame Format</SL>
+                      <pre className="text-[9px] font-mono leading-relaxed overflow-x-auto whitespace-pre-wrap rounded p-2.5"
+                        style={{background:T.panelBg,border:`1px solid ${T.border}`,color:T.muted}}>
 {`{ "timestamp": 1721000000,
   "updates": [{"i":5,"d":1.23}],
   "motors": {"left":0.75,"right":0.0},
-  "diagnostics": {
-    "cpu":42, "battery":78,
-    "refresh_rate":30, "speed":0.8,
-    "bottleneck":"none", "uptime":3600,
-    "temp":44, "signal":-65 } }`}
-                    </pre>
-                  </div>
-
-                  <Div theme={T}/>
-                  {!shutdownConfirm
-                    ? <button onClick={()=>setShutdownConfirm(true)} disabled={!canSend}
-                        className="w-full py-2 font-mono rounded transition-colors disabled:opacity-20"
-                        style={{fontSize:11,border:'1px solid rgba(255,68,68,0.25)',color:'#ff4444'}}>⏻ REMOTE SHUTDOWN</button>
-                    : <div className="flex flex-col gap-2">
-                        <p className="text-[10px] text-center font-mono" style={{color:'#ff4444'}}>Confirm shutdown?</p>
-                        <div className="flex gap-2">
-                          <button onClick={sendShutdown} disabled={shutdownSent}
-                            className="flex-1 py-2 font-mono rounded disabled:opacity-50" style={{fontSize:11,background:'#ff4444',color:'#fff'}}>
-                            {shutdownSent?'SENT…':'CONFIRM'}
-                          </button>
-                          <button onClick={()=>setShutdownConfirm(false)} className="flex-1 py-2 font-mono rounded transition-colors"
-                            style={{fontSize:11,border:`1px solid ${T.border}`,color:T.muted}}>CANCEL</button>
+  "log": ["[INFO] scan ok"],
+  "diagnostics": { ... } }`}
+                      </pre>
+                    </div>
+                    <Div theme={T}/>
+                    {!shutdownConfirm
+                      ? <button onClick={()=>setShutdownConfirm(true)} disabled={!canSend} className="w-full py-2 font-mono rounded disabled:opacity-20"
+                          style={{fontSize:11,border:'1px solid rgba(255,68,68,0.25)',color:'#ff4444'}}>⏻ REMOTE SHUTDOWN</button>
+                      : <div className="flex flex-col gap-2">
+                          <p className="text-[10px] text-center font-mono" style={{color:'#ff4444'}}>Confirm shutdown?</p>
+                          <div className="flex gap-2">
+                            <button onClick={sendShutdown} disabled={shutdownSent} className="flex-1 py-2 font-mono rounded disabled:opacity-50"
+                              style={{fontSize:11,background:'#ff4444',color:'#fff'}}>{shutdownSent?'SENT…':'CONFIRM'}</button>
+                            <button onClick={()=>setShutdownConfirm(false)} className="flex-1 py-2 font-mono rounded"
+                              style={{fontSize:11,border:`1px solid ${T.border}`,color:T.muted}}>CANCEL</button>
+                          </div>
                         </div>
-                      </div>
-                  }
-                </>}
+                    }
+                  </div>
+                )}
 
                 {/* ══ SETTINGS ══ */}
-                {tab==='settings' && <>
-                  <p className="text-[9px] leading-relaxed" style={{color:T.muted}}>
-                    Sent to cane as <code className="rounded px-1" style={{background:T.panelBg,color:T.accent}}>settings</code> command.
-                  </p>
-                  <div className="flex flex-col gap-3">
-                    <SL theme={T}>Motor Multipliers</SL>
-                    <Slider label="Left ×" value={pendingSettings.motor_left_mult} min={0} max={2} step={0.05} theme={T} onChange={v=>setPendingSettings(s=>({...s,motor_left_mult:v}))}/>
-                    <Slider label="Right ×" value={pendingSettings.motor_right_mult} min={0} max={2} step={0.05} theme={T} onChange={v=>setPendingSettings(s=>({...s,motor_right_mult:v}))}/>
-                  </div>
-                  <Div theme={T}/>
-                  <div className="flex flex-col gap-3">
-                    <SL theme={T}>Sensor</SL>
-                    <Slider label="Refresh Rate" value={pendingSettings.refresh_rate} min={1} max={60} step={1} unit=" Hz" theme={T} onChange={v=>setPendingSettings(s=>({...s,refresh_rate:v}))}/>
-                  </div>
-                  <Div theme={T}/>
-                  <div className="flex flex-col gap-3">
-                    <SL theme={T}>Vibration Thresholds</SL>
-                    <Slider label="Near threshold" value={pendingSettings.threshold_near} min={0.1} max={2.0} step={0.05} unit=" m" theme={T} onChange={v=>setPendingSettings(s=>({...s,threshold_near:v}))}/>
-                    <Slider label="Far threshold" value={pendingSettings.threshold_far} min={0.5} max={MAX_RANGE} step={0.1} unit=" m" theme={T} onChange={v=>setPendingSettings(s=>({...s,threshold_far:v}))}/>
-                    <div className="relative h-2 rounded-full overflow-hidden" style={{background:T.panelBg2}}>
-                      <div className="absolute h-full rounded-l-full" style={{width:`${pendingSettings.threshold_near/MAX_RANGE*100}%`,background:'rgba(255,51,51,0.35)'}}/>
-                      <div className="absolute h-full" style={{left:`${pendingSettings.threshold_near/MAX_RANGE*100}%`,width:`${(pendingSettings.threshold_far-pendingSettings.threshold_near)/MAX_RANGE*100}%`,background:'rgba(255,170,0,0.25)'}}/>
+                {tab==='settings' && (
+                  <div className="flex flex-col gap-5 p-4">
+                    <div className="flex flex-col gap-3">
+                      <SL theme={T}>Motor Multipliers</SL>
+                      <Slider label="Left ×" value={pendingSettings.motor_left_mult} min={0} max={2} step={0.05} theme={T} onChange={v=>setPendingSettings(s=>({...s,motor_left_mult:v}))}/>
+                      <Slider label="Right ×" value={pendingSettings.motor_right_mult} min={0} max={2} step={0.05} theme={T} onChange={v=>setPendingSettings(s=>({...s,motor_right_mult:v}))}/>
                     </div>
-                    <div className="flex justify-between text-[9px] font-mono">
-                      <span style={{color:'#ff3333'}}>vibrate</span>
-                      <span style={{color:'#ffaa00'}}>ramp</span>
-                      <span style={{color:T.muted}}>quiet</span>
+                    <Div theme={T}/>
+                    <div className="flex flex-col gap-3">
+                      <SL theme={T}>Sensor</SL>
+                      <Slider label="Refresh Rate" value={pendingSettings.refresh_rate} min={1} max={60} step={1} unit=" Hz" theme={T} onChange={v=>setPendingSettings(s=>({...s,refresh_rate:v}))}/>
                     </div>
-                  </div>
-                  <Div theme={T}/>
-                  <pre className="text-[9px] font-mono leading-relaxed overflow-x-auto rounded p-2.5"
-                    style={{background:T.panelBg,border:`1px solid ${T.border}`,color:T.muted}}>
-                    {JSON.stringify({command:'settings',settings:pendingSettings},null,2)}
-                  </pre>
-                  <div className="flex flex-col gap-2">
-                    <button onClick={sendSettings} disabled={!canSend}
-                      className="py-2.5 font-mono rounded transition-colors disabled:opacity-25"
+                    <Div theme={T}/>
+                    <div className="flex flex-col gap-3">
+                      <SL theme={T}>Vibration Thresholds</SL>
+                      <Slider label="Near" value={pendingSettings.threshold_near} min={0.1} max={2.0} step={0.05} unit=" m" theme={T} onChange={v=>setPendingSettings(s=>({...s,threshold_near:v}))}/>
+                      <Slider label="Far" value={pendingSettings.threshold_far} min={0.5} max={MAX_RANGE} step={0.1} unit=" m" theme={T} onChange={v=>setPendingSettings(s=>({...s,threshold_far:v}))}/>
+                      <div className="relative h-2 rounded-full overflow-hidden" style={{background:T.panelBg2}}>
+                        <div className="absolute h-full rounded-l-full" style={{width:`${pendingSettings.threshold_near/MAX_RANGE*100}%`,background:'rgba(255,51,51,0.35)'}}/>
+                        <div className="absolute h-full" style={{left:`${pendingSettings.threshold_near/MAX_RANGE*100}%`,width:`${(pendingSettings.threshold_far-pendingSettings.threshold_near)/MAX_RANGE*100}%`,background:'rgba(255,170,0,0.25)'}}/>
+                      </div>
+                      <div className="flex justify-between text-[9px] font-mono">
+                        <span style={{color:'#ff3333'}}>vibrate</span><span style={{color:'#ffaa00'}}>ramp</span><span style={{color:T.muted}}>quiet</span>
+                      </div>
+                    </div>
+                    <Div theme={T}/>
+                    <button onClick={sendSettings} disabled={!canSend} className="py-2.5 font-mono rounded disabled:opacity-25"
                       style={{fontSize:11,border:`1px solid ${settingsSent?'rgba(0,204,102,0.4)':T.accent+'88'}`,background:settingsSent?'rgba(0,204,102,0.06)':'transparent',color:settingsSent?'#00cc66':T.accent}}>
                       {settingsSent?'✓ SENT':'SEND TO CANE'}
                     </button>
-                    <button onClick={()=>setPendingSettings(DEFAULT_SETTINGS)}
-                      className="py-1.5 font-mono transition-colors" style={{fontSize:10,color:T.muted}}>
-                      Reset to defaults
-                    </button>
+                    <button onClick={()=>setPendingSettings(DEFAULT_SETTINGS)} className="py-1.5 font-mono" style={{fontSize:10,color:T.muted}}>Reset to defaults</button>
                   </div>
-                </>}
+                )}
 
                 {/* ══ THEME ══ */}
-                {tab==='theme' && <>
-                  <div className="flex flex-col gap-2">
-                    <SL theme={T}>Preset Themes</SL>
-                    <div className="grid grid-cols-1 gap-1.5">
-                      {THEMES.map(th => (
-                        <button key={th.id} onClick={()=>{ setTheme(th); setUseCustom(false) }}
-                          className="flex items-center gap-3 px-3 py-2.5 rounded transition-colors text-left"
-                          style={{border:`1px solid ${!useCustom&&theme.id===th.id?T.accent:T.border}`,background:!useCustom&&theme.id===th.id?`${T.accent}10`:T.panelBg}}>
-                          {/* Color swatch strip */}
-                          <div className="flex gap-0.5 shrink-0">
-                            {[th.nearColor,th.midColor,th.farColor].map((c,i) => (
-                              <span key={i} className="w-3 h-5 rounded-sm inline-block"
-                                style={{background:`#${c.toString(16).padStart(6,'0')}`}}/>
-                            ))}
-                          </div>
-                          <div className="flex flex-col gap-0.5">
+                {tab==='theme' && (
+                  <div className="flex flex-col gap-4 p-4">
+                    <div className="flex flex-col gap-2">
+                      <SL theme={T}>Presets</SL>
+                      <div className="flex flex-col gap-1.5">
+                        {THEMES.map(th => (
+                          <button key={th.id} onClick={()=>{setTheme(th);setUseCustom(false)}}
+                            className="flex items-center gap-3 px-3 py-2.5 rounded text-left"
+                            style={{border:`1px solid ${!useCustom&&theme.id===th.id?T.accent:T.border}`,background:!useCustom&&theme.id===th.id?`${T.accent}10`:T.panelBg}}>
+                            <div className="flex gap-0.5 shrink-0">
+                              {[th.nearColor,th.midColor,th.farColor].map((c,i) => (
+                                <span key={i} className="w-3 h-5 rounded-sm inline-block" style={{background:`#${c.toString(16).padStart(6,'0')}`}}/>
+                              ))}
+                            </div>
                             <span className="font-mono text-[11px]" style={{color:!useCustom&&theme.id===th.id?T.accent:T.text}}>{th.name}</span>
-                            <span className="font-mono text-[9px]" style={{color:T.muted}}>{th.accent}</span>
-                          </div>
-                          {!useCustom&&theme.id===th.id&&<span className="ml-auto text-[9px] font-mono" style={{color:T.accent}}>ACTIVE</span>}
+                            {!useCustom&&theme.id===th.id&&<span className="ml-auto text-[9px] font-mono" style={{color:T.accent}}>ACTIVE</span>}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <Div theme={T}/>
+                    <div className="flex flex-col gap-3">
+                      <div className="flex items-center justify-between">
+                        <SL theme={T}>Custom</SL>
+                        <button onClick={()=>setUseCustom(u=>!u)} className="font-mono text-[9px] rounded px-2 py-1"
+                          style={{border:`1px solid ${useCustom?T.accent:T.border}`,color:useCustom?T.accent:T.muted,background:useCustom?`${T.accent}10`:'transparent'}}>
+                          {useCustom?'ACTIVE':'USE'}
                         </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <Div theme={T}/>
-
-                  <div className="flex flex-col gap-3">
-                    <div className="flex items-center justify-between">
-                      <SL theme={T}>Custom Theme</SL>
-                      <button onClick={()=>setUseCustom(u=>!u)}
-                        className="font-mono text-[9px] rounded px-2 py-1 transition-colors"
-                        style={{border:`1px solid ${useCustom?T.accent:T.border}`,color:useCustom?T.accent:T.muted,background:useCustom?`${T.accent}10`:'transparent'}}>
-                        {useCustom?'ACTIVE':'USE'}
-                      </button>
-                    </div>
-
-                    {/* Color pickers */}
-                    {([ ['Accent color', 'accent'], ['Near (close)', 'nearColor'], ['Mid', 'midColor'], ['Far (max range)', 'farColor'], ] as [string,keyof Theme][]).map(([lbl,key]) => {
-                      const hexVal = typeof customTheme[key]==='number'
-                        ? `#${(customTheme[key] as number).toString(16).padStart(6,'0')}`
-                        : customTheme[key] as string
-                      return (
-                        <div key={key} className="flex items-center gap-2">
-                          <label className="text-[9px] font-mono flex-1" style={{color:T.muted}}>{lbl}</label>
-                          <div className="flex items-center gap-1.5">
+                      </div>
+                      {(['accent','nearColor','midColor','farColor'] as (keyof Theme)[]).map(key => {
+                        const hexVal = typeof customTheme[key]==='number'
+                          ? `#${(customTheme[key] as number).toString(16).padStart(6,'0')}`
+                          : customTheme[key] as string
+                        const labels: Record<string,string> = { accent:'Accent', nearColor:'Near (close)', midColor:'Mid', farColor:'Far (max)' }
+                        return (
+                          <div key={key} className="flex items-center gap-2">
+                            <label className="text-[9px] font-mono flex-1" style={{color:T.muted}}>{labels[key]}</label>
                             <span className="font-mono text-[9px]" style={{color:T.muted}}>{hexVal}</span>
                             <input type="color" value={hexVal}
-                              onChange={e => {
-                                const hex = e.target.value
-                                const num = parseInt(hex.slice(1), 16)
-                                setCustomTheme(ct => ({
-                                  ...ct,
-                                  [key]: typeof ct[key]==='number' ? num : hex,
-                                  panelBg: ct.surfaceBg,
-                                }))
+                              onChange={e=>{
+                                const hex=e.target.value; const num=parseInt(hex.slice(1),16)
+                                setCustomTheme(ct=>({...ct,[key]:typeof ct[key]==='number'?num:hex}))
                               }}
-                              className="w-7 h-7 rounded cursor-pointer border-0 p-0"
-                              style={{background:'transparent'}}/>
+                              className="w-7 h-7 rounded cursor-pointer border-0 p-0" style={{background:'transparent'}}/>
                           </div>
-                        </div>
-                      )
-                    })}
-
-                    <button onClick={()=>setCustomTheme({...T, id:'custom', name:'Custom'})}
-                      className="py-1.5 font-mono transition-colors" style={{fontSize:10,color:T.muted}}>
-                      Copy from current preset
-                    </button>
+                        )
+                      })}
+                      <button onClick={()=>setCustomTheme({...T,id:'custom',name:'Custom'})} className="py-1.5 font-mono" style={{fontSize:10,color:T.muted}}>Copy from current preset</button>
+                    </div>
                   </div>
-                </>}
+                )}
 
                 {/* ══ FIRMWARE ══ */}
-                {tab==='firmware' && <>
-                  <p className="text-[9px] leading-relaxed" style={{color:T.muted}}>
-                    Sends <code className="rounded px-1" style={{background:T.panelBg,color:T.accent}}>firmware_start</code> → binary chunks → <code className="rounded px-1" style={{background:T.panelBg,color:T.accent}}>firmware_end</code>.
-                  </p>
-
-                  {/* Drop zone */}
-                  <div
-                    onDragOver={e=>{e.preventDefault();setFwDragging(true)}}
-                    onDragLeave={()=>setFwDragging(false)}
-                    onDrop={(e:DragEvent<HTMLDivElement>)=>{e.preventDefault();setFwDragging(false);const f=e.dataTransfer.files[0];if(f){setFwFile(f);setFwStatus('idle');setFwProgress(null)}}}
-                    onClick={()=>document.getElementById('fw-input')?.click()}
-                    className="flex flex-col items-center justify-center gap-2 rounded cursor-pointer transition-all p-6"
-                    style={{border:`2px dashed ${fwDragging?T.accent:T.border}`,background:fwDragging?`${T.accent}08`:'transparent'}}>
-                    <svg width="26" height="26" viewBox="0 0 26 26" fill="none">
-                      <path d="M13 3v13M13 3l-5 5M13 3l5 5" stroke={fwDragging?T.accent:T.muted} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                      <path d="M3 19v2a2 2 0 002 2h16a2 2 0 002-2v-2" stroke={fwDragging?T.accent:T.muted} strokeWidth="1.5" strokeLinecap="round"/>
-                    </svg>
-                    <span className="text-[10px] font-mono text-center" style={{color:T.muted}}>
-                      {fwDragging?'Drop firmware':'Drop .bin / .hex or click'}
-                    </span>
-                    <input id="fw-input" type="file" accept=".bin,.hex,.elf,.fw" className="hidden"
-                      onChange={e=>{const f=e.target.files?.[0];if(f){setFwFile(f);setFwStatus('idle');setFwProgress(null)}}}/>
+                {tab==='firmware' && (
+                  <div className="flex flex-col gap-4 p-4">
+                    <div
+                      onDragOver={e=>{e.preventDefault();setFwDragging(true)}}
+                      onDragLeave={()=>setFwDragging(false)}
+                      onDrop={(e:DragEvent<HTMLDivElement>)=>{e.preventDefault();setFwDragging(false);const f=e.dataTransfer.files[0];if(f){setFwFile(f);setFwStatus('idle');setFwProgress(null)}}}
+                      onClick={()=>document.getElementById('fw-input')?.click()}
+                      className="flex flex-col items-center justify-center gap-2 rounded cursor-pointer p-6"
+                      style={{border:`2px dashed ${fwDragging?T.accent:T.border}`,background:fwDragging?`${T.accent}08`:'transparent'}}>
+                      <svg width="26" height="26" viewBox="0 0 26 26" fill="none">
+                        <path d="M13 3v13M13 3l-5 5M13 3l5 5" stroke={fwDragging?T.accent:T.muted} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                        <path d="M3 19v2a2 2 0 002 2h16a2 2 0 002-2v-2" stroke={fwDragging?T.accent:T.muted} strokeWidth="1.5" strokeLinecap="round"/>
+                      </svg>
+                      <span className="text-[10px] font-mono" style={{color:T.muted}}>{fwDragging?'Drop firmware':'Drop .bin / .hex or click'}</span>
+                      <input id="fw-input" type="file" accept=".bin,.hex,.elf,.fw" className="hidden"
+                        onChange={e=>{const f=e.target.files?.[0];if(f){setFwFile(f);setFwStatus('idle');setFwProgress(null)}}}/>
+                    </div>
+                    {fwFile && (
+                      <div className="flex items-center justify-between rounded p-3" style={{border:`1px solid ${T.border}`,background:T.panelBg}}>
+                        <div className="flex flex-col gap-0.5">
+                          <span className="font-mono text-[11px] truncate max-w-[160px]" style={{color:T.text}}>{fwFile.name}</span>
+                          <span className="font-mono text-[9px]" style={{color:T.muted}}>{fmtB(fwFile.size)}</span>
+                        </div>
+                        <button onClick={()=>{setFwFile(null);setFwProgress(null);setFwStatus('idle')}} style={{color:T.muted,fontSize:20,lineHeight:1}}>×</button>
+                      </div>
+                    )}
+                    {fwProgress!==null && (
+                      <div className="flex flex-col gap-1.5">
+                        <div className="flex justify-between font-mono text-[9px]">
+                          <span style={{color:fwStatus==='done'?'#00cc66':fwStatus==='error'?'#ff4444':T.accent}}>
+                            {fwStatus==='done'?'✓ COMPLETE':fwStatus==='error'?'✗ ERROR':`UPLOADING ${fwProgress}%`}
+                          </span>
+                          {fwFile&&<span style={{color:T.muted}}>{fmtB(Math.round(fwFile.size*fwProgress/100))} / {fmtB(fwFile.size)}</span>}
+                        </div>
+                        <div className="h-1 rounded-full overflow-hidden" style={{background:T.panelBg2}}>
+                          <div className="h-full rounded-full" style={{width:`${fwProgress}%`,background:fwStatus==='done'?'#00cc66':fwStatus==='error'?'#ff4444':T.accent}}/>
+                        </div>
+                      </div>
+                    )}
+                    <button onClick={uploadFw} disabled={!canSend||!fwFile||fwStatus==='uploading'}
+                      className="py-2.5 font-mono rounded disabled:opacity-25"
+                      style={{fontSize:11,border:`1px solid ${fwStatus==='done'?'rgba(0,204,102,0.4)':fwStatus==='error'?'rgba(255,68,68,0.4)':T.accent+'88'}`,color:fwStatus==='done'?'#00cc66':fwStatus==='error'?'#ff4444':T.accent}}>
+                      {fwStatus==='uploading'?`Uploading ${fwProgress}%…`:fwStatus==='done'?'✓ Done':fwStatus==='error'?'✗ Retry':'Upload Firmware'}
+                    </button>
                   </div>
+                )}
 
-                  {fwFile && (
-                    <div className="flex items-center justify-between rounded p-3" style={{border:`1px solid ${T.border}`,background:T.panelBg}}>
-                      <div className="flex flex-col gap-0.5">
-                        <span className="font-mono text-[11px] truncate max-w-[150px]" style={{color:T.text}}>{fwFile.name}</span>
-                        <span className="font-mono text-[9px]" style={{color:T.muted}}>{fmtB(fwFile.size)}</span>
+                {/* ══ LOGS ══ */}
+                {tab==='logs' && (
+                  <div className="flex flex-col flex-1 overflow-hidden">
+                    {/* Sub-tab bar + controls */}
+                    <div className="flex items-center gap-2 px-3 py-2 shrink-0" style={{borderBottom:`1px solid ${T.border}`}}>
+                      <div className="flex gap-1 flex-1">
+                        {(['cane','repl'] as const).map(st => (
+                          <button key={st} onClick={()=>setLogsSubTab(st)}
+                            className="px-2.5 py-1 rounded font-mono text-[9px] uppercase tracking-wider"
+                            style={{border:`1px solid ${logsSubTab===st?T.accent:T.border}`,background:logsSubTab===st?`${T.accent}15`:'transparent',color:logsSubTab===st?T.accent:T.muted}}>
+                            {st==='cane'?`Cane (${caneLogs.length})`:'REPL'}
+                          </button>
+                        ))}
                       </div>
-                      <button onClick={()=>{setFwFile(null);setFwProgress(null);setFwStatus('idle')}}
-                        className="text-lg leading-none transition-colors" style={{color:T.muted}}>×</button>
+                      <button onClick={()=>setLogEntries([])} className="font-mono text-[9px]" style={{color:T.muted}} title="Clear">✕ Clear</button>
+                      {logsSubTab==='cane' && caneLogs.length > 0 && (
+                        <button onClick={exportLogs} className="font-mono text-[9px]" style={{color:T.accent}} title="Export logs">↓</button>
+                      )}
                     </div>
-                  )}
 
-                  {fwProgress!==null && (
-                    <div className="flex flex-col gap-1.5">
-                      <div className="flex justify-between font-mono text-[9px]">
-                        <span style={{color:fwStatus==='done'?'#00cc66':fwStatus==='error'?'#ff4444':T.accent}}>
-                          {fwStatus==='done'?'✓ COMPLETE':fwStatus==='error'?'✗ ERROR':`UPLOADING ${fwProgress}%`}
-                        </span>
-                        {fwFile&&<span style={{color:T.muted}}>{fmtB(Math.round(fwFile.size*fwProgress/100))} / {fmtB(fwFile.size)}</span>}
+                    {/* Cane logs pane */}
+                    {logsSubTab==='cane' && (
+                      <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-0.5">
+                        {caneLogs.length === 0
+                          ? <div className="flex-1 flex items-center justify-center text-[10px] font-mono" style={{color:T.muted}}>
+                              No log messages yet.<br/>Add <code style={{color:T.accent}}>"log":["msg"]</code> to frames.
+                            </div>
+                          : caneLogs.map(e => (
+                              <div key={e.id} className="flex gap-2 text-[10px] font-mono leading-tight">
+                                <span className="shrink-0" style={{color:T.muted}}>{new Date(e.ts).toLocaleTimeString('en',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'})}</span>
+                                <span style={{color:caneMsgColor(e.msg)}}>{e.msg}</span>
+                              </div>
+                            ))
+                        }
+                        <div ref={logsEndRef}/>
                       </div>
-                      <div className="h-1 rounded-full overflow-hidden" style={{background:T.panelBg2}}>
-                        <div className="h-full rounded-full transition-all duration-100"
-                          style={{width:`${fwProgress}%`,background:fwStatus==='done'?'#00cc66':fwStatus==='error'?'#ff4444':T.accent}}/>
+                    )}
+
+                    {/* REPL pane */}
+                    {logsSubTab==='repl' && (
+                      <div className="flex flex-col flex-1 overflow-hidden">
+                        {/* Context hint */}
+                        <div className="px-3 py-1.5 text-[9px] font-mono shrink-0" style={{background:T.panelBg2,color:T.muted}}>
+                          Available: <span style={{color:T.accent}}>depthBuffer · motors · diag · frameCount · lastFrame</span>
+                        </div>
+
+                        {/* Output */}
+                        <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-0.5">
+                          {replLogs.length === 0 && (
+                            <div className="text-[10px] font-mono p-2" style={{color:T.muted}}>
+                              Type a JS expression below.<br/>
+                              <span style={{color:T.accent}}>depthBuffer.slice(0,8)</span> — first 8 depth values<br/>
+                              <span style={{color:T.accent}}>motors.left * 100</span> — left motor %<br/>
+                              <span style={{color:T.accent}}>diag.cpu</span> — CPU usage
+                            </div>
+                          )}
+                          {replLogs.map(e => (
+                            <div key={e.id} className="flex gap-2 text-[10px] font-mono leading-snug">
+                              <span className="shrink-0" style={{color:T.muted}}>
+                                {e.source==='repl-in' ? '>' : e.source==='repl-err' ? '!' : '←'}
+                              </span>
+                              <span className="break-all whitespace-pre-wrap" style={{color:logColor(e.source)}}>{e.msg}</span>
+                            </div>
+                          ))}
+                          <div ref={replEndRef}/>
+                        </div>
+
+                        {/* Input */}
+                        <div className="shrink-0 flex items-center gap-2 px-2 py-2" style={{borderTop:`1px solid ${T.border}`}}>
+                          <span className="font-mono text-[11px] shrink-0" style={{color:T.accent}}>›</span>
+                          <input
+                            value={replInput}
+                            onChange={e=>setReplInput(e.target.value)}
+                            onKeyDown={e=>{
+                              if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); submitRepl(replInput) }
+                              if (e.key==='ArrowUp') {
+                                e.preventDefault()
+                                const idx = Math.min(replHistIdx+1, replHistory.length-1)
+                                setReplHistIdx(idx); if (replHistory[idx]!==undefined) setReplInput(replHistory[idx])
+                              }
+                              if (e.key==='ArrowDown') {
+                                e.preventDefault()
+                                const idx = replHistIdx-1
+                                setReplHistIdx(idx); setReplInput(idx>=0&&replHistory[idx]!==undefined?replHistory[idx]:'')
+                              }
+                            }}
+                            placeholder="expression or statement…"
+                            className="flex-1 font-mono text-[11px] bg-transparent outline-none"
+                            style={{color:T.text}}
+                            spellCheck={false}
+                            autoComplete="off"
+                          />
+                        </div>
                       </div>
-                    </div>
-                  )}
-
-                  <button onClick={uploadFw} disabled={!canSend||!fwFile||fwStatus==='uploading'}
-                    className="py-2.5 font-mono rounded transition-colors disabled:opacity-25"
-                    style={{fontSize:11,border:`1px solid ${fwStatus==='done'?'rgba(0,204,102,0.4)':fwStatus==='error'?'rgba(255,68,68,0.4)':T.accent+'88'}`,
-                      color:fwStatus==='done'?'#00cc66':fwStatus==='error'?'#ff4444':T.accent}}>
-                    {fwStatus==='uploading'?`Uploading ${fwProgress}%…`:fwStatus==='done'?'✓ Upload Complete':fwStatus==='error'?'✗ Failed — Retry':'Upload Firmware'}
-                  </button>
-
-                  <Div theme={T}/>
-                  <div className="flex flex-col gap-2">
-                    <SL theme={T}>Command Sequence</SL>
-                    <div className="flex flex-col gap-1 font-mono text-[9px]" style={{color:T.muted}}>
-                      <div><span style={{color:T.accent}}>1.</span> {`{"command":"firmware_start","size":N}`}</div>
-                      <div><span style={{color:'#ffaa00'}}>2.</span> Binary chunks (4 KB each)</div>
-                      <div><span style={{color:'#00cc66'}}>3.</span> {`{"command":"firmware_end"}`}</div>
-                    </div>
+                    )}
                   </div>
-                </>}
+                )}
 
               </div>
             </aside>
-
-            {/* Resize handle */}
             <div onMouseDown={startSidebarDrag}
-              className="w-1 shrink-0 cursor-ew-resize hover:opacity-60 transition-opacity"
-              style={{background:'transparent'}}
+              className="w-1 shrink-0 cursor-ew-resize"
               onMouseEnter={e=>(e.currentTarget.style.background=T.accent+'44')}
-              onMouseLeave={e=>(e.currentTarget.style.background='transparent')}/>
+              onMouseLeave={e=>(e.currentTarget.style.background='transparent')}
+              style={{background:'transparent'}}/>
           </div>
         )}
 
         {/* ── 3D Viewer ── */}
         <main className="flex-1 relative overflow-hidden">
           <Viewer3D depthBuffer={depthSnap} motors={motors} connected={connected} displayMode={displayMode} theme={activeTheme}/>
-
           {connected && (
             <div className="absolute bottom-0 inset-x-0 px-5 py-2 flex items-center gap-4 pointer-events-none"
-              style={{background:'linear-gradient(to top, rgba(8,12,16,0.8) 0%, transparent 100%)'}}>
+              style={{background:'linear-gradient(to top,rgba(8,12,16,.8),transparent)'}}>
               <div className="flex gap-4 font-mono text-[11px]" style={{color:T.muted}}>
                 <span>CPU <span style={{color:T.accent}}>{diag.cpu.toFixed(1)}%</span></span>
                 <span>BAT <span style={{color:diag.battery>50?'#00cc66':diag.battery>20?'#ffaa00':'#ff4444'}}>{diag.battery.toFixed(0)}%</span></span>
                 <span>FPS <span style={{color:T.accent}}>{diag.refresh_rate.toFixed(1)}</span></span>
-                {diag.bottleneck!=='none'&&diag.bottleneck!=='' && <span className="animate-pulse" style={{color:'#ff4444'}}>⚠ {diag.bottleneck.toUpperCase()}</span>}
+                {lastTs&&<span style={{color:T.muted}}>{new Date(lastTs).toLocaleTimeString()}</span>}
               </div>
             </div>
           )}

@@ -24,6 +24,7 @@ export interface CaneFrame {
   updates: DepthUpdate[]
   motors: MotorState
   diagnostics: Diagnostics
+  log?: string[]   // optional log lines from the cane firmware
 }
 
 export interface CaneSettings {

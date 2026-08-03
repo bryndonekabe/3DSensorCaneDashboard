@@ -34,32 +34,47 @@ function makeDepthColor(d: number, near: THREE.Color, mid: THREE.Color, far: THR
   return t < 0.5 ? out.lerpColors(near, mid, t * 2) : out.lerpColors(mid, far, (t - 0.5) * 2)
 }
 
+// Fill NaN / out-of-range cells by iteratively averaging valid neighbours,
+// then falling back to MAX_RANGE so the mesh always covers the full 8×8 grid.
+function fillDepthBuffer(buf: Float32Array): Float32Array {
+  const out = new Float32Array(buf)
+  let changed = true
+  while (changed) {
+    changed = false
+    for (let i = 0; i < GRID_SIZE; i++) {
+      if (!isNaN(out[i]) && out[i] > 0 && out[i] <= MAX_RANGE) continue
+      const row = Math.floor(i / SENSOR_COLS), col = i % SENSOR_COLS
+      const ns: number[] = []
+      if (row > 0 && !isNaN(out[i - SENSOR_COLS]) && out[i - SENSOR_COLS] > 0) ns.push(out[i - SENSOR_COLS])
+      if (row < SENSOR_ROWS - 1 && !isNaN(out[i + SENSOR_COLS]) && out[i + SENSOR_COLS] > 0) ns.push(out[i + SENSOR_COLS])
+      if (col > 0 && !isNaN(out[i - 1]) && out[i - 1] > 0) ns.push(out[i - 1])
+      if (col < SENSOR_COLS - 1 && !isNaN(out[i + 1]) && out[i + 1] > 0) ns.push(out[i + 1])
+      if (ns.length > 0) { out[i] = ns.reduce((a, b) => a + b, 0) / ns.length; changed = true }
+    }
+  }
+  for (let i = 0; i < GRID_SIZE; i++) if (isNaN(out[i]) || out[i] <= 0) out[i] = MAX_RANGE
+  return out
+}
+
 function buildMeshGeometry(buf: Float32Array, near: THREE.Color, mid: THREE.Color, far: THREE.Color): THREE.BufferGeometry {
+  const filled = fillDepthBuffer(buf)
   const positions: number[] = [], colors: number[] = [], indices: number[] = []
-  const vmap = new Int32Array(GRID_SIZE).fill(-1)
-  let vi = 0
 
   for (let i = 0; i < GRID_SIZE; i++) {
-    const d = buf[i]
-    if (isNaN(d) || d <= 0 || d > MAX_RANGE) continue
+    const d = filled[i]
     const r = RAY_DIRS[i]
     positions.push(r.x * d, r.y * d, r.z * d)
     const c = makeDepthColor(d, near, mid, far)
     colors.push(c.r, c.g, c.b)
-    vmap[i] = vi++
   }
 
-  const MAX_JUMP = 0.55
+  // Every adjacent quad → 2 triangles, no discontinuity skip (hole-free)
   for (let row = 0; row < SENSOR_ROWS - 1; row++) {
     for (let col = 0; col < SENSOR_COLS - 1; col++) {
       const i00 = row * SENSOR_COLS + col, i01 = i00 + 1
       const i10 = i00 + SENSOR_COLS, i11 = i10 + 1
-      const v00 = vmap[i00], v01 = vmap[i01], v10 = vmap[i10], v11 = vmap[i11]
-      const d00 = buf[i00], d01 = buf[i01], d10 = buf[i10], d11 = buf[i11]
-      if (v00>=0&&v01>=0&&v10>=0 && Math.abs(d00-d01)<MAX_JUMP && Math.abs(d00-d10)<MAX_JUMP)
-        indices.push(v00, v01, v10)
-      if (v01>=0&&v11>=0&&v10>=0 && Math.abs(d01-d11)<MAX_JUMP && Math.abs(d01-d10)<MAX_JUMP)
-        indices.push(v01, v11, v10)
+      indices.push(i00, i01, i10)
+      indices.push(i01, i11, i10)
     }
   }
 
@@ -142,14 +157,14 @@ function MotorBox({ motors, theme, boundsRef }: MotorBoxProps) {
       {/* Drag handle */}
       <div onPointerDown={e => startDrag(e, 'move')}
         className="flex items-center justify-center cursor-grab active:cursor-grabbing"
-        style={{ height: 18, background: theme.panelBg2, border: `1px solid ${theme.border}`, borderBottom: 'none', borderRadius: '4px 4px 0 0' }}>
+        style={{ height: 18, background: theme.panelBg2, borderTop: `1px solid ${theme.border}`, borderLeft: `1px solid ${theme.border}`, borderRight: `1px solid ${theme.border}`, borderRadius: '4px 4px 0 0' }}>
         <div className="flex gap-0.5">
           {[0,1,2,3,4,5].map(i => <div key={i} className="rounded-full" style={{ width: 14, height: 2, background: theme.border }}/>)}
         </div>
       </div>
 
       {/* Motor cells */}
-      <div className="flex" style={{ border: `1px solid ${theme.border}`, borderTop: 'none', borderRadius: '0 0 4px 4px', overflow: 'hidden' }}>
+      <div className="flex" style={{ borderBottom: `1px solid ${theme.border}`, borderLeft: `1px solid ${theme.border}`, borderRight: `1px solid ${theme.border}`, borderRadius: '0 0 4px 4px', overflow: 'hidden' }}>
         {motorCell('left')}
         <div style={{ width: 1, background: theme.border, flexShrink: 0 }}/>
         {motorCell('right')}
