@@ -194,6 +194,14 @@ export default function App() {
   }
 
   const applyFrame = useCallback((frame: CaneFrame) => {
+console.log(
+    "received",
+    frame.updates.length,
+    "first",
+    frame.updates.slice(0,5),
+    "last",
+    frame.updates.slice(-5)
+  )
     for (const {i,d} of frame.updates) { if (i>=0&&i<GRID_SIZE) depthBuf.current[i]=d }
     setDepthVer(v=>v+1); setMotors(frame.motors); setDiag(frame.diagnostics)
     setLastTs(frame.timestamp); setFrameCount(c=>c+1)

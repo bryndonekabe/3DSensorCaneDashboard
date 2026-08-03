@@ -39,8 +39,10 @@ export type Protocol = 'websocket' | 'mqtt'
 export type DisplayMode = 'dots' | 'spheres' | 'mesh'
 
 export const SENSOR_ROWS = 8
-export const SENSOR_COLS = 8
-export const FOV_H_DEG = 60
-export const FOV_V_DEG = 45
+export const SENSOR_COLS = 16
+// export const SENSOR_COLS = 8
+export const FOV_H_DEG = 120
+// export const FOV_H_DEG = 60
+export const FOV_V_DEG = 60
 export const MAX_RANGE = 3.5
 export const GRID_SIZE = SENSOR_ROWS * SENSOR_COLS

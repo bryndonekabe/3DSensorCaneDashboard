@@ -169,6 +169,8 @@ function MotorBox({ motors, theme, boundsRef }: MotorBoxProps) {
 
 // ─── Main Viewer ──────────────────────────────────────────────────────────────
 export default function Viewer3D({ depthBuffer, motors, connected, displayMode, theme }: Props) {
+console.log("depthBuffer length:", depthBuffer.length)
+console.log("RAY_DIRS length:", RAY_DIRS.length)
   const wrapRef = useRef<HTMLDivElement>(null)   // outer div — bounds for MotorBox
   const canvasRef = useRef<HTMLDivElement>(null)  // inner div — renderer target
 
