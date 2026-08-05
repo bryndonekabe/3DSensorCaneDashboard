@@ -25,7 +25,7 @@ export const THEMES: Theme[] = [
   {
     id: 'void',
     name: 'Void',
-    bgColor: 0x080c10, gridColor: 0x0b1e30,
+    bgColor: 0x0e1a28, gridColor: 0x1a3050,
     nearColor: 0xff2222, midColor: 0xffaa00, farColor: 0x00e5ff,
     motorLeftHue: 180, motorRightHue: 195,
     accent: '#00e5ff', accentDim: '#00b8cc',
@@ -35,7 +35,7 @@ export const THEMES: Theme[] = [
   {
     id: 'ember',
     name: 'Ember',
-    bgColor: 0x0e0804, gridColor: 0x2a1406,
+    bgColor: 0x1c1008, gridColor: 0x3d1e0a,
     nearColor: 0xff1111, midColor: 0xff6600, farColor: 0xffcc00,
     motorLeftHue: 30, motorRightHue: 45,
     accent: '#ff7700', accentDim: '#cc5500',
@@ -45,7 +45,7 @@ export const THEMES: Theme[] = [
   {
     id: 'matrix',
     name: 'Matrix',
-    bgColor: 0x020e04, gridColor: 0x051a09,
+    bgColor: 0x071a0c, gridColor: 0x0c2e12,
     nearColor: 0x00ff44, midColor: 0x00dd88, farColor: 0x00aacc,
     motorLeftHue: 140, motorRightHue: 160,
     accent: '#00ff66', accentDim: '#00cc44',
@@ -55,7 +55,7 @@ export const THEMES: Theme[] = [
   {
     id: 'plasma',
     name: 'Plasma',
-    bgColor: 0x0a0514, gridColor: 0x180a2e,
+    bgColor: 0x140a28, gridColor: 0x250f48,
     nearColor: 0xff00aa, midColor: 0xaa00ff, farColor: 0x00ccff,
     motorLeftHue: 280, motorRightHue: 300,
     accent: '#cc44ff', accentDim: '#9922cc',
@@ -65,7 +65,7 @@ export const THEMES: Theme[] = [
   {
     id: 'frost',
     name: 'Frost',
-    bgColor: 0x06101a, gridColor: 0x0d1e2e,
+    bgColor: 0x0c1e30, gridColor: 0x173048,
     nearColor: 0xffffff, midColor: 0x88ccff, farColor: 0x0088ee,
     motorLeftHue: 210, motorRightHue: 220,
     accent: '#66aaff', accentDim: '#4488cc',
