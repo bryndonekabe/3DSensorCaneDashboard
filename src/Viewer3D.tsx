@@ -203,6 +203,9 @@ console.log("RAY_DIRS length:", RAY_DIRS.length)
     instMesh: THREE.InstancedMesh
     surfMesh: THREE.Mesh
     dummy: THREE.Object3D
+    xArrow: THREE.ArrowHelper
+    yArrow: THREE.ArrowHelper
+    zArrow: THREE.ArrowHelper
     raf: number
   } | null>(null)
 
@@ -267,6 +270,15 @@ console.log("RAY_DIRS length:", RAY_DIRS.length)
       ))
     }
 
+    // World-space axes (X=near/warm, Y=mid, Z=far/cool)
+    const AXIS_LEN = 0.45
+    const xArrow = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), AXIS_LEN, theme.nearColor, 0.1, 0.045)
+    const yArrow = new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(), AXIS_LEN, theme.midColor,  0.1, 0.045)
+    const zArrow = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(), AXIS_LEN, theme.farColor,  0.1, 0.045)
+    const axesGrp = new THREE.Group()
+    axesGrp.add(xArrow, yArrow, zArrow)
+    scene.add(axesGrp)
+
     // Dots
     const ptCloud = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ size: 0.06, vertexColors: true, sizeAttenuation: true }))
     scene.add(ptCloud)
@@ -314,7 +326,7 @@ console.log("RAY_DIRS length:", RAY_DIRS.length)
     }
     animate()
 
-    sceneRef.current = { renderer, scene, camera, controls, ptCloud, instMesh, surfMesh, dummy, raf }
+    sceneRef.current = { renderer, scene, camera, controls, ptCloud, instMesh, surfMesh, dummy, xArrow, yArrow, zArrow, raf }
     return () => window.removeEventListener('resize', onResize)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -339,6 +351,9 @@ console.log("RAY_DIRS length:", RAY_DIRS.length)
     const s = sceneRef.current; if (!s) return
     s.renderer.setClearColor(theme.bgColor)
     ;(s.scene.fog as THREE.FogExp2).color.set(theme.bgColor)
+    s.xArrow.setColor(theme.nearColor)
+    s.yArrow.setColor(theme.midColor)
+    s.zArrow.setColor(theme.farColor)
   }, [theme])
 
   // Rebuild point cloud / spheres / mesh
@@ -404,6 +419,12 @@ console.log("RAY_DIRS length:", RAY_DIRS.length)
         <div className="flex items-center gap-1.5">
           <span className="w-2 h-2 rounded-full shrink-0" style={{ background: theme.accent }}/>
           <span className="text-[9px] font-mono" style={{ color: theme.muted }}>Sensor origin</span>
+        </div>
+        <div className="flex items-center gap-2 mt-0.5">
+          <span className="font-mono text-[9px] font-bold" style={{ color: hexCss(theme.nearColor) }}>X</span>
+          <span className="font-mono text-[9px] font-bold" style={{ color: hexCss(theme.midColor) }}>Y</span>
+          <span className="font-mono text-[9px] font-bold" style={{ color: hexCss(theme.farColor) }}>Z</span>
+          <span className="text-[9px] font-mono" style={{ color: theme.muted }}>axes</span>
         </div>
       </div>
 
