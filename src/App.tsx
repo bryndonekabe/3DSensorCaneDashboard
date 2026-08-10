@@ -132,9 +132,9 @@ function Div({ theme }: { theme: Theme }) { return <div style={{height:1,backgro
 const EMPTY_DIAG: Diagnostics = { cpu:0, battery:100, refresh_rate:0, speed:0, bottleneck:'none', uptime:0 }
 const EMPTY_MOTORS: MotorState = { left:0, right:0 }
 const DEFAULT_SETTINGS: CaneSettings = { motor_left_mult:1.0, motor_right_mult:1.0, refresh_rate:30, threshold_near:0.8, threshold_far:2.5 }
-const TABS = ['diag','config','settings','theme','firmware','logs'] as const
+const TABS = ['diag','config','settings','theme','firmware','logs','preview'] as const
 type Tab = typeof TABS[number]
-const TAB_LABELS: Record<Tab,string> = { diag:'Diag', config:'Link', settings:'Tune', theme:'Theme', firmware:'FW', logs:'Logs' }
+const TAB_LABELS: Record<Tab,string> = { diag:'Diag', config:'Link', settings:'Tune', theme:'Thm', firmware:'FW', logs:'Logs', preview:'Live' }
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
@@ -200,6 +200,17 @@ export default function App() {
   const [fwDragging, setFwDragging] = useState(false)
   const [fwProgress, setFwProgress] = useState<number|null>(null)
   const [fwStatus, setFwStatus] = useState<'idle'|'uploading'|'done'|'error'>('idle')
+
+  // Live Preview tab
+  const [pvHost, setPvHost] = useState('192.168.1.100')
+  const [pvPort, setPvPort] = useState('8765')
+  const [pvPath, setPvPath] = useState('/preview')
+  const [pvFps, setPvFps] = useState(10)
+  const [pvStatus, setPvStatus] = useState<ConnectionStatus>('disconnected')
+  const [pvImg, setPvImg] = useState<string|null>(null)
+  const [pvFrameCount, setPvFrameCount] = useState(0)
+  const pvWsRef = useRef<WebSocket|null>(null)
+  const pvTimerRef = useRef<ReturnType<typeof setInterval>|null>(null)
 
   // Refs
   const wsRef = useRef<WebSocket|null>(null)
@@ -329,6 +340,41 @@ console.log(
     demoTimer.current = setInterval(() => { demoTime.current += 1/15; applyFrame(generateDemoFrame(demoTime.current)) }, 67)
   }, [disconnect, applyFrame])
 
+  // ─── Live Preview ──────────────────────────────────────────────────────────
+  const pvDisconnect = useCallback(() => {
+    if (pvTimerRef.current) { clearInterval(pvTimerRef.current); pvTimerRef.current = null }
+    pvWsRef.current?.close(); pvWsRef.current = null
+    setPvStatus('disconnected')
+  }, [])
+
+  const pvConnect = useCallback(() => {
+    pvDisconnect()
+    setPvStatus('connecting')
+    const url = `${wsScheme()}://${pvHost}:${pvPort}${normalizeWsPath(pvPath)}`
+    const ws = new WebSocket(url)
+    pvWsRef.current = ws
+    ws.onopen = () => setPvStatus('connected')
+    ws.onclose = () => { setPvStatus('disconnected'); pvWsRef.current = null }
+    ws.onerror = () => setPvStatus('error')
+    ws.onmessage = evt => {
+      try {
+        const d = JSON.parse(evt.data)
+        if (typeof d.image === 'string') { setPvImg(d.image); setPvFrameCount(c => c + 1) }
+      } catch {}
+    }
+  }, [pvHost, pvPort, pvPath, pvDisconnect]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Restart request_frame timer whenever fps or connection state changes
+  useEffect(() => {
+    if (pvStatus !== 'connected') return
+    if (pvTimerRef.current) clearInterval(pvTimerRef.current)
+    pvTimerRef.current = setInterval(() => {
+      const ws = pvWsRef.current
+      if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ command: 'request_frame' }))
+    }, 1000 / pvFps)
+    return () => { if (pvTimerRef.current) { clearInterval(pvTimerRef.current); pvTimerRef.current = null } }
+  }, [pvStatus, pvFps])
+
   // Settings / shutdown / firmware
   const sendSettings = useCallback(() => {
     sendCmd({ command:'settings', settings:pendingSettings }); setSettingsSent(true)
@@ -433,7 +479,8 @@ console.log(
   useEffect(() => () => {
     if (demoTimer.current) clearInterval(demoTimer.current)
     wsRef.current?.close(); mqttRef.current?.end(true)
-  }, [])
+    pvDisconnect()
+  }, [pvDisconnect])
 
   const connected = status === 'connected'
   const canSend = connected && !demoMode
@@ -918,6 +965,116 @@ console.log(
                         </div>
                       </div>
                     )}
+                  </div>
+                )}
+
+                {/* ══ PREVIEW ══ */}
+                {tab==='preview' && (
+                  <div className="flex flex-col flex-1 overflow-hidden">
+                    {/* Settings */}
+                    <div className="flex flex-col gap-3 p-4 shrink-0" style={{borderBottom:`1px solid ${T.border}`}}>
+                      <SL theme={T}>Live Preview Stream</SL>
+                      {([
+                        ['Host / IP', pvHost, setPvHost],
+                        ['Port',      pvPort, setPvPort],
+                        ['Path',      pvPath, setPvPath],
+                      ] as [string, string, (v:string)=>void][]).map(([lbl,val,set]) => (
+                        <div key={lbl} className="flex flex-col gap-1">
+                          <label className="text-[9px] font-mono" style={{color:T.muted}}>{lbl}</label>
+                          <input value={val} onChange={e=>set(e.target.value)}
+                            disabled={pvStatus==='connected'}
+                            style={iStyle}/>
+                        </div>
+                      ))}
+                      {/* URL preview */}
+                      <div className="font-mono text-[9px] rounded px-2 py-1.5 break-all" style={{background:T.panelBg2,color:T.muted}}>
+                        {wsScheme()}://{pvHost}:{pvPort}{normalizeWsPath(pvPath)}
+                      </div>
+                      {/* FPS slider — always editable */}
+                      <Slider label="Request Rate" value={pvFps} min={1} max={30} step={1} unit=" fps" theme={T}
+                        onChange={setPvFps}/>
+                      {/* Connect / disconnect */}
+                      <div className="flex gap-2 items-center">
+                        {pvStatus !== 'connected'
+                          ? <button onClick={pvConnect}
+                              className="flex-1 py-2 font-mono rounded font-semibold"
+                              style={{fontSize:11,background:T.accent,color:T.surfaceBg}}>
+                              CONNECT
+                            </button>
+                          : <button onClick={pvDisconnect}
+                              className="flex-1 py-2 font-mono rounded"
+                              style={{fontSize:11,border:'1px solid rgba(255,68,68,0.35)',color:'#ff4444'}}>
+                              DISCONNECT
+                            </button>
+                        }
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <StatusDot status={pvStatus} theme={T}/>
+                          <span className="font-mono text-[9px]" style={{color:pvStatus==='connected'?'#00cc66':pvStatus==='connecting'?'#ffaa00':pvStatus==='error'?'#ff4444':T.muted}}>
+                            {pvStatus.toUpperCase()}
+                          </span>
+                        </div>
+                      </div>
+                      {pvStatus==='connected' && (
+                        <div className="flex justify-between font-mono text-[9px]" style={{color:T.muted}}>
+                          <span>Frames received: <span style={{color:T.accent}}>{pvFrameCount}</span></span>
+                          <span><span style={{color:T.accent}}>{pvFps}</span> req/s</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Image display */}
+                    <div className="flex-1 overflow-y-auto flex flex-col gap-3 p-3">
+                      {pvImg
+                        ? <div className="flex flex-col gap-2">
+                            <img
+                              src={`data:image/jpeg;base64,${pvImg}`}
+                              alt="Live preview frame"
+                              className="w-full rounded"
+                              style={{border:`1px solid ${T.border}`,imageRendering:'auto'}}
+                            />
+                            <div className="flex justify-between font-mono text-[9px]" style={{color:T.muted}}>
+                              <span>Frame #{pvFrameCount}</span>
+                              <button onClick={()=>{setPvImg(null);setPvFrameCount(0)}}
+                                className="hover:opacity-70">clear</button>
+                            </div>
+                          </div>
+                        : <div className="flex-1 flex flex-col items-center justify-center gap-2 py-8"
+                            style={{border:`1px dashed ${T.border}`,borderRadius:6}}>
+                            <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                              <rect x="2" y="5" width="24" height="18" rx="2" stroke={T.muted} strokeWidth="1.2"/>
+                              <circle cx="10" cy="12" r="2.5" stroke={T.muted} strokeWidth="1.2"/>
+                              <path d="M2 19l6-5 4 4 4-4 6 5" stroke={T.muted} strokeWidth="1.2" strokeLinejoin="round"/>
+                            </svg>
+                            <span className="text-[9px] font-mono" style={{color:T.muted}}>
+                              {pvStatus==='connected'?'Waiting for first frame…':'Connect to see frames'}
+                            </span>
+                          </div>
+                      }
+
+                      {/* Frame format docs */}
+                      <div className="flex flex-col gap-2 mt-1">
+                        <SL theme={T}>Frame Formats</SL>
+                        <div className="flex flex-col gap-1">
+                          <span className="text-[9px] font-mono" style={{color:T.muted}}>Command sent at {pvFps} Hz →</span>
+                          <pre className="text-[9px] font-mono leading-relaxed rounded p-2.5 overflow-x-auto"
+                            style={{background:T.panelBg,border:`1px solid ${T.border}`,color:T.accent}}>
+{`{ "command": "request_frame" }`}
+                          </pre>
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <span className="text-[9px] font-mono" style={{color:T.muted}}>Response received ←</span>
+                          <pre className="text-[9px] font-mono leading-relaxed rounded p-2.5 overflow-x-auto"
+                            style={{background:T.panelBg,border:`1px solid ${T.border}`,color:T.text}}>
+{`{
+  "image": "<base64 string>"
+}`}
+                          </pre>
+                          <span className="text-[9px] font-mono" style={{color:T.muted}}>
+                            JPEG or PNG base64. Content-type is auto-detected as JPEG; adjust src prefix in code if needed.
+                          </span>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 )}
 
