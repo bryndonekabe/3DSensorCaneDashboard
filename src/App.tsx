@@ -112,6 +112,48 @@ function Slider({ label, value, min, max, step=0.01, unit, onChange, theme }: {
   )
 }
 
+function Radio({
+  label,
+  checked,
+  onChange,
+  theme,
+}: {
+  label: string
+  checked: boolean
+  onChange: () => void
+  theme: Theme
+}) {
+  return (
+    <label
+      className="flex items-center gap-2 cursor-pointer font-mono text-[10px]"
+      style={{ color: checked ? theme.text : theme.muted }}
+    >
+      <span
+        className="w-3 h-3 rounded-full flex items-center justify-center shrink-0"
+        style={{
+          border: `1px solid ${checked ? theme.accent : theme.border}`,
+        }}
+      >
+        {checked && (
+          <span
+            className="w-1.5 h-1.5 rounded-full"
+            style={{ background: theme.accent }}
+          />
+        )}
+      </span>
+
+      {label}
+
+      <input
+        type="radio"
+        checked={checked}
+        onChange={onChange}
+        className="hidden"
+      />
+    </label>
+  )
+}
+
 function BatteryIcon({ pct }: { pct: number }) {
   const color = pct>50?'#00cc66':pct>20?'#ffaa00':'#ff4444'
   return (
@@ -131,7 +173,7 @@ function Div({ theme }: { theme: Theme }) { return <div style={{height:1,backgro
 // ─── Constants ────────────────────────────────────────────────────────────────
 const EMPTY_DIAG: Diagnostics = { cpu:0, battery:100, refresh_rate:0, speed:0, bottleneck:'none', uptime:0 }
 const EMPTY_MOTORS: MotorState = { left:0, right:0 }
-const DEFAULT_SETTINGS: CaneSettings = { motor_left_mult:1.0, motor_right_mult:1.0, refresh_rate:30, threshold_near:0.8, threshold_far:2.5 }
+const DEFAULT_SETTINGS: CaneSettings = { motor_left_mult:1.0, motor_right_mult:1.0, motor_equation:'linear', piecewise_levels:[0.2, 0.5, 1.0], threshold_near:0.8, threshold_far:2.5 }
 const TABS = ['diag','config','settings','theme','firmware','logs','preview'] as const
 type Tab = typeof TABS[number]
 const TAB_LABELS: Record<Tab,string> = { diag:'Diag', config:'Link', settings:'Tune', theme:'Thm', firmware:'FW', logs:'Logs', preview:'Live' }
@@ -744,8 +786,44 @@ console.log(
                     </div>
                     <Div theme={T}/>
                     <div className="flex flex-col gap-3">
-                      <SL theme={T}>Sensor</SL>
-                      <Slider label="Refresh Rate" value={pendingSettings.refresh_rate} min={1} max={60} step={1} unit=" Hz" theme={T} onChange={v=>setPendingSettings(s=>({...s,refresh_rate:v}))}/>
+                      <SL theme={T}>Motor Equation</SL>
+                      {(["linear", "exponential", "logarithmic", "piecewise"] as const).map(eq => (
+                        <Radio
+                          key={eq}
+                          label={eq.charAt(0).toUpperCase() + eq.slice(1)}
+                          checked={pendingSettings.motor_equation === eq}
+                          onChange={() =>
+                            setPendingSettings(s => ({
+                              ...s,
+                              motor_equation: eq,
+                            }))
+                          }
+                          theme={T}
+                        />
+                      ))}
+                      {pendingSettings.motor_equation === "piecewise" && (
+                        <div className="flex flex-col gap-3 pl-5 pt-1">
+                          {pendingSettings.piecewise_levels.map((level, i) => (
+                            <Slider
+                              key={i}
+                              label={`Level ${i + 1}`}
+                              value={level}
+                              min={0}
+                              max={1}
+                              step={0.05}
+                              theme={T}
+                              onChange={v =>
+                                setPendingSettings(s => ({
+                                  ...s,
+                                  piecewise_levels: s.piecewise_levels.map((x, j) =>
+                                    j === i ? v : x
+                                  ),
+                                }))
+                              }
+                            />
+                          ))}
+                        </div>
+                      )}
                     </div>
                     <Div theme={T}/>
                     <div className="flex flex-col gap-3">
@@ -972,7 +1050,7 @@ console.log(
                 {tab==='preview' && (
                   <div className="flex flex-col flex-1 overflow-hidden">
                     {/* Settings */}
-                    <div className="flex flex-col gap-3 p-4 shrink-0" style={{borderBottom:`1px solid ${T.border}`}}>
+                    <div className="flex flex-col gap-2 px-3 py-2 shrink-0" style={{borderBottom:`1px solid ${T.border}`}}>
                       <SL theme={T}>Live Preview Stream</SL>
                       {([
                         ['Host / IP', pvHost, setPvHost],
@@ -1023,9 +1101,9 @@ console.log(
                     </div>
 
                     {/* Image display */}
-                    <div className="flex-1 overflow-y-auto flex flex-col gap-3 p-3">
+                    <div className="flex-1 overflow-y-auto flex flex-col gap-1 p-3">
                       {pvImg
-                        ? <div className="flex flex-col gap-2">
+                        ? <div className="flex flex-col gap-1">
                             <img
                               src={`data:image/jpeg;base64,${pvImg}`}
                               alt="Live preview frame"

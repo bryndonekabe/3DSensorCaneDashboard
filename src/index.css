@@ -27,6 +27,7 @@ html, body, #root {
   background: #080c10;
   color: #c8ddf0;
   font-family: 'Inter', sans-serif;
+  font-size: 40px;
 }
 
 ::-webkit-scrollbar { width: 4px; }
@@ -34,3 +35,4 @@ html, body, #root {
 ::-webkit-scrollbar-thumb { background: #1a2d42; border-radius: 2px; }
 
 .font-mono { font-family: 'JetBrains Mono', monospace; }
+

@@ -30,7 +30,12 @@ export interface CaneFrame {
 export interface CaneSettings {
   motor_left_mult: number
   motor_right_mult: number
-  refresh_rate: number
+  // NOTE: changed to motor_equation
+  // NOTE: from refresh_rate
+  motor_equation: 'linear' | 'exponential' | 'logarithmic' | 'piecewise'
+  // These are the motor multiplier levels for levels:
+  // one, two and three
+  piecewise_levels: [number, number, number]
   threshold_near: number
   threshold_far: number
 }

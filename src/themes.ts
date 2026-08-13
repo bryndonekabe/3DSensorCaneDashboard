@@ -30,8 +30,11 @@ export const THEMES: Theme[] = [
     motorLeftHue: 180, motorRightHue: 195,
     accent: '#00e5ff', accentDim: '#00b8cc',
     surfaceBg: '#080c10', panelBg: '#0d1520', panelBg2: '#111d2e',
-    border: '#1a2d42', text: '#c8ddf0', muted: '#4a6280',
+    border: '#1a2d42',
+    text: '#e6f2ff',
+    muted: '#8fa8c2',
   },
+
   {
     id: 'ember',
     name: 'Ember',
@@ -40,8 +43,11 @@ export const THEMES: Theme[] = [
     motorLeftHue: 30, motorRightHue: 45,
     accent: '#ff7700', accentDim: '#cc5500',
     surfaceBg: '#0e0804', panelBg: '#1a0d06', panelBg2: '#22110a',
-    border: '#3d1e0a', text: '#f0d4b0', muted: '#7a4a28',
+    border: '#3d1e0a',
+    text: '#ffe8d0',
+    muted: '#b08060',
   },
+
   {
     id: 'matrix',
     name: 'Matrix',
@@ -50,8 +56,11 @@ export const THEMES: Theme[] = [
     motorLeftHue: 140, motorRightHue: 160,
     accent: '#00ff66', accentDim: '#00cc44',
     surfaceBg: '#020e04', panelBg: '#061408', panelBg2: '#0a1e0d',
-    border: '#0e3316', text: '#a0e8b0', muted: '#2a6640',
+    border: '#0e3316',
+    text: '#d8ffe0',
+    muted: '#76b88a',
   },
+
   {
     id: 'plasma',
     name: 'Plasma',
@@ -60,8 +69,11 @@ export const THEMES: Theme[] = [
     motorLeftHue: 280, motorRightHue: 300,
     accent: '#cc44ff', accentDim: '#9922cc',
     surfaceBg: '#0a0514', panelBg: '#12082a', panelBg2: '#180e36',
-    border: '#2e1255', text: '#d8b8f8', muted: '#6a3a9a',
+    border: '#2e1255',
+    text: '#f0dcff',
+    muted: '#a078c0',
   },
+
   {
     id: 'frost',
     name: 'Frost',
@@ -70,7 +82,9 @@ export const THEMES: Theme[] = [
     motorLeftHue: 210, motorRightHue: 220,
     accent: '#66aaff', accentDim: '#4488cc',
     surfaceBg: '#06101a', panelBg: '#0d1a28', panelBg2: '#122030',
-    border: '#1a3050', text: '#cce0f8', muted: '#4a7090',
+    border: '#1a3050',
+    text: '#e0efff',
+    muted: '#82a6c4',
   },
 ]
 
